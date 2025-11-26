@@ -146,7 +146,8 @@ extension Mount {
         // Ensure propagation type change flags aren't included in other calls.
         let originalFlags = opts.flags & ~(propagationTypes)
 
-        let targetURL = URL(fileURLWithPath: self.target)
+        // Use the 'target' parameter which has rootfs prefix, not self.target
+        let targetURL = URL(fileURLWithPath: target)
         let targetParent = targetURL.deletingLastPathComponent().path
         if let perms = createWithPerms {
             try mkdirAll(targetParent, perms)

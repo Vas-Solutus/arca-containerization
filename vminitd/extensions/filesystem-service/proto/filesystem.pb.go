@@ -631,6 +631,135 @@ func (x *WriteArchiveResponse) GetError() string {
 	return ""
 }
 
+// Request to create a bind mount inside the container
+type CreateBindMountRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Container ID (for resolving /run/container/{id}/rootfs path)
+	ContainerId string `protobuf:"bytes,1,opt,name=container_id,json=containerId,proto3" json:"container_id,omitempty"`
+	// Source path inside VM (absolute path, e.g., "/mnt/arca-file-mounts/abc123/myfile.txt")
+	// Can be a file or directory
+	Source string `protobuf:"bytes,2,opt,name=source,proto3" json:"source,omitempty"`
+	// Target path relative to container root (e.g., "/test.txt" or "/app/config.yaml")
+	// Will be resolved to /run/container/{container_id}/rootfs{target}
+	Target string `protobuf:"bytes,3,opt,name=target,proto3" json:"target,omitempty"`
+	// Read-only mount (default: false for read-write)
+	ReadOnly      bool `protobuf:"varint,4,opt,name=read_only,json=readOnly,proto3" json:"read_only,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateBindMountRequest) Reset() {
+	*x = CreateBindMountRequest{}
+	mi := &file_filesystem_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateBindMountRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateBindMountRequest) ProtoMessage() {}
+
+func (x *CreateBindMountRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_filesystem_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateBindMountRequest.ProtoReflect.Descriptor instead.
+func (*CreateBindMountRequest) Descriptor() ([]byte, []int) {
+	return file_filesystem_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *CreateBindMountRequest) GetContainerId() string {
+	if x != nil {
+		return x.ContainerId
+	}
+	return ""
+}
+
+func (x *CreateBindMountRequest) GetSource() string {
+	if x != nil {
+		return x.Source
+	}
+	return ""
+}
+
+func (x *CreateBindMountRequest) GetTarget() string {
+	if x != nil {
+		return x.Target
+	}
+	return ""
+}
+
+func (x *CreateBindMountRequest) GetReadOnly() bool {
+	if x != nil {
+		return x.ReadOnly
+	}
+	return false
+}
+
+type CreateBindMountResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Success status
+	Success bool `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	// Error message if success = false
+	Error         string `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateBindMountResponse) Reset() {
+	*x = CreateBindMountResponse{}
+	mi := &file_filesystem_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateBindMountResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateBindMountResponse) ProtoMessage() {}
+
+func (x *CreateBindMountResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_filesystem_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateBindMountResponse.ProtoReflect.Descriptor instead.
+func (*CreateBindMountResponse) Descriptor() ([]byte, []int) {
+	return file_filesystem_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *CreateBindMountResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *CreateBindMountResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 var File_filesystem_proto protoreflect.FileDescriptor
 
 const file_filesystem_proto_rawDesc = "" +
@@ -672,12 +801,21 @@ const file_filesystem_proto_rawDesc = "" +
 	"\btar_data\x18\x03 \x01(\fR\atarData\"F\n" +
 	"\x14WriteArchiveResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error2\xb1\x03\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"\x88\x01\n" +
+	"\x16CreateBindMountRequest\x12!\n" +
+	"\fcontainer_id\x18\x01 \x01(\tR\vcontainerId\x12\x16\n" +
+	"\x06source\x18\x02 \x01(\tR\x06source\x12\x16\n" +
+	"\x06target\x18\x03 \x01(\tR\x06target\x12\x1b\n" +
+	"\tread_only\x18\x04 \x01(\bR\breadOnly\"I\n" +
+	"\x17CreateBindMountResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error2\x9d\x04\n" +
 	"\x11FilesystemService\x12g\n" +
 	"\x0eSyncFilesystem\x12).arca.filesystem.v1.SyncFilesystemRequest\x1a*.arca.filesystem.v1.SyncFilesystemResponse\x12p\n" +
 	"\x11EnumerateUpperdir\x12,.arca.filesystem.v1.EnumerateUpperdirRequest\x1a-.arca.filesystem.v1.EnumerateUpperdirResponse\x12^\n" +
 	"\vReadArchive\x12&.arca.filesystem.v1.ReadArchiveRequest\x1a'.arca.filesystem.v1.ReadArchiveResponse\x12a\n" +
-	"\fWriteArchive\x12'.arca.filesystem.v1.WriteArchiveRequest\x1a(.arca.filesystem.v1.WriteArchiveResponseB6Z4github.com/vas-solutus/arca-filesystem-service/protob\x06proto3"
+	"\fWriteArchive\x12'.arca.filesystem.v1.WriteArchiveRequest\x1a(.arca.filesystem.v1.WriteArchiveResponse\x12j\n" +
+	"\x0fCreateBindMount\x12*.arca.filesystem.v1.CreateBindMountRequest\x1a+.arca.filesystem.v1.CreateBindMountResponseB6Z4github.com/vas-solutus/arca-filesystem-service/protob\x06proto3"
 
 var (
 	file_filesystem_proto_rawDescOnce sync.Once
@@ -691,7 +829,7 @@ func file_filesystem_proto_rawDescGZIP() []byte {
 	return file_filesystem_proto_rawDescData
 }
 
-var file_filesystem_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_filesystem_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_filesystem_proto_goTypes = []any{
 	(*SyncFilesystemRequest)(nil),     // 0: arca.filesystem.v1.SyncFilesystemRequest
 	(*SyncFilesystemResponse)(nil),    // 1: arca.filesystem.v1.SyncFilesystemResponse
@@ -703,23 +841,27 @@ var file_filesystem_proto_goTypes = []any{
 	(*PathStat)(nil),                  // 7: arca.filesystem.v1.PathStat
 	(*WriteArchiveRequest)(nil),       // 8: arca.filesystem.v1.WriteArchiveRequest
 	(*WriteArchiveResponse)(nil),      // 9: arca.filesystem.v1.WriteArchiveResponse
+	(*CreateBindMountRequest)(nil),    // 10: arca.filesystem.v1.CreateBindMountRequest
+	(*CreateBindMountResponse)(nil),   // 11: arca.filesystem.v1.CreateBindMountResponse
 }
 var file_filesystem_proto_depIdxs = []int32{
-	4, // 0: arca.filesystem.v1.EnumerateUpperdirResponse.entries:type_name -> arca.filesystem.v1.UpperdirEntry
-	7, // 1: arca.filesystem.v1.ReadArchiveResponse.stat:type_name -> arca.filesystem.v1.PathStat
-	0, // 2: arca.filesystem.v1.FilesystemService.SyncFilesystem:input_type -> arca.filesystem.v1.SyncFilesystemRequest
-	2, // 3: arca.filesystem.v1.FilesystemService.EnumerateUpperdir:input_type -> arca.filesystem.v1.EnumerateUpperdirRequest
-	5, // 4: arca.filesystem.v1.FilesystemService.ReadArchive:input_type -> arca.filesystem.v1.ReadArchiveRequest
-	8, // 5: arca.filesystem.v1.FilesystemService.WriteArchive:input_type -> arca.filesystem.v1.WriteArchiveRequest
-	1, // 6: arca.filesystem.v1.FilesystemService.SyncFilesystem:output_type -> arca.filesystem.v1.SyncFilesystemResponse
-	3, // 7: arca.filesystem.v1.FilesystemService.EnumerateUpperdir:output_type -> arca.filesystem.v1.EnumerateUpperdirResponse
-	6, // 8: arca.filesystem.v1.FilesystemService.ReadArchive:output_type -> arca.filesystem.v1.ReadArchiveResponse
-	9, // 9: arca.filesystem.v1.FilesystemService.WriteArchive:output_type -> arca.filesystem.v1.WriteArchiveResponse
-	6, // [6:10] is the sub-list for method output_type
-	2, // [2:6] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	4,  // 0: arca.filesystem.v1.EnumerateUpperdirResponse.entries:type_name -> arca.filesystem.v1.UpperdirEntry
+	7,  // 1: arca.filesystem.v1.ReadArchiveResponse.stat:type_name -> arca.filesystem.v1.PathStat
+	0,  // 2: arca.filesystem.v1.FilesystemService.SyncFilesystem:input_type -> arca.filesystem.v1.SyncFilesystemRequest
+	2,  // 3: arca.filesystem.v1.FilesystemService.EnumerateUpperdir:input_type -> arca.filesystem.v1.EnumerateUpperdirRequest
+	5,  // 4: arca.filesystem.v1.FilesystemService.ReadArchive:input_type -> arca.filesystem.v1.ReadArchiveRequest
+	8,  // 5: arca.filesystem.v1.FilesystemService.WriteArchive:input_type -> arca.filesystem.v1.WriteArchiveRequest
+	10, // 6: arca.filesystem.v1.FilesystemService.CreateBindMount:input_type -> arca.filesystem.v1.CreateBindMountRequest
+	1,  // 7: arca.filesystem.v1.FilesystemService.SyncFilesystem:output_type -> arca.filesystem.v1.SyncFilesystemResponse
+	3,  // 8: arca.filesystem.v1.FilesystemService.EnumerateUpperdir:output_type -> arca.filesystem.v1.EnumerateUpperdirResponse
+	6,  // 9: arca.filesystem.v1.FilesystemService.ReadArchive:output_type -> arca.filesystem.v1.ReadArchiveResponse
+	9,  // 10: arca.filesystem.v1.FilesystemService.WriteArchive:output_type -> arca.filesystem.v1.WriteArchiveResponse
+	11, // 11: arca.filesystem.v1.FilesystemService.CreateBindMount:output_type -> arca.filesystem.v1.CreateBindMountResponse
+	7,  // [7:12] is the sub-list for method output_type
+	2,  // [2:7] is the sub-list for method input_type
+	2,  // [2:2] is the sub-list for extension type_name
+	2,  // [2:2] is the sub-list for extension extendee
+	0,  // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_filesystem_proto_init() }
@@ -733,7 +875,7 @@ func file_filesystem_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_filesystem_proto_rawDesc), len(file_filesystem_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   10,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -146,27 +146,28 @@ struct Application {
             log.warning("arca-wireguard-service binary not found at \(wireGuardServicePath), WireGuard networking will not be available")
         }
 
-        // Start arca-overlayfs-service in background for OverlayFS layer mounting
+        // Start arca-filesystem-service in background for filesystem operations
         // This service listens on vsock port 51821 (accessible from host via container.dialVsock())
-        let overlayFSServicePath = "/sbin/arca-overlayfs-service"
-        let overlayFSServiceExists = FileManager.default.fileExists(atPath: overlayFSServicePath)
-        log.info("arca-overlayfs-service binary exists: \(overlayFSServiceExists) at \(overlayFSServicePath)")
+        // Provides: filesystem sync, upperdir enumeration (docker diff), bind mounts (file volumes), archive operations
+        let filesystemServicePath = "/sbin/arca-filesystem-service"
+        let filesystemServiceExists = FileManager.default.fileExists(atPath: filesystemServicePath)
+        log.info("arca-filesystem-service binary exists: \(filesystemServiceExists) at \(filesystemServicePath)")
 
-        if overlayFSServiceExists {
-            log.info("starting arca-overlayfs-service...")
-            var overlayFSService = Command(overlayFSServicePath)
+        if filesystemServiceExists {
+            log.info("starting arca-filesystem-service...")
+            var filesystemService = Command(filesystemServicePath)
             // Leave stdin/stdout/stderr as nil for detached background service
-            overlayFSService.stdin = nil
-            overlayFSService.stdout = nil
-            overlayFSService.stderr = .standardError  // Log errors to vminitd stderr
+            filesystemService.stdin = nil
+            filesystemService.stdout = nil
+            filesystemService.stderr = .standardError  // Log errors to vminitd stderr
             do {
-                try overlayFSService.start()
-                log.info("arca-overlayfs-service started successfully on vsock port 51821")
+                try filesystemService.start()
+                log.info("arca-filesystem-service started successfully on vsock port 51821")
             } catch {
-                log.error("failed to start arca-overlayfs-service: \(error)")
+                log.error("failed to start arca-filesystem-service: \(error)")
             }
         } else {
-            log.warning("arca-overlayfs-service binary not found at \(overlayFSServicePath), OverlayFS mounting will not be available")
+            log.warning("arca-filesystem-service binary not found at \(filesystemServicePath), filesystem operations will not be available")
         }
 
         // Start arca-process-service in background for process control

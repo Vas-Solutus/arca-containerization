@@ -32,6 +32,7 @@ const (
 	FilesystemService_EnumerateUpperdir_FullMethodName = "/arca.filesystem.v1.FilesystemService/EnumerateUpperdir"
 	FilesystemService_ReadArchive_FullMethodName       = "/arca.filesystem.v1.FilesystemService/ReadArchive"
 	FilesystemService_WriteArchive_FullMethodName      = "/arca.filesystem.v1.FilesystemService/WriteArchive"
+	FilesystemService_CreateBindMount_FullMethodName   = "/arca.filesystem.v1.FilesystemService/CreateBindMount"
 )
 
 // FilesystemServiceClient is the client API for FilesystemService service.
@@ -57,6 +58,10 @@ type FilesystemServiceClient interface {
 	// Works universally without requiring tar in container
 	// Used for PUT /containers/{id}/archive endpoint (buildx)
 	WriteArchive(ctx context.Context, in *WriteArchiveRequest, opts ...grpc.CallOption) (*WriteArchiveResponse, error)
+	// Create bind mount - bind mount a file or directory to another location
+	// Works like "mount --bind /source /target" inside the container
+	// Used for file bind mounts (VirtioFS only supports directory shares)
+	CreateBindMount(ctx context.Context, in *CreateBindMountRequest, opts ...grpc.CallOption) (*CreateBindMountResponse, error)
 }
 
 type filesystemServiceClient struct {
@@ -107,6 +112,16 @@ func (c *filesystemServiceClient) WriteArchive(ctx context.Context, in *WriteArc
 	return out, nil
 }
 
+func (c *filesystemServiceClient) CreateBindMount(ctx context.Context, in *CreateBindMountRequest, opts ...grpc.CallOption) (*CreateBindMountResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateBindMountResponse)
+	err := c.cc.Invoke(ctx, FilesystemService_CreateBindMount_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // FilesystemServiceServer is the server API for FilesystemService service.
 // All implementations must embed UnimplementedFilesystemServiceServer
 // for forward compatibility.
@@ -130,6 +145,10 @@ type FilesystemServiceServer interface {
 	// Works universally without requiring tar in container
 	// Used for PUT /containers/{id}/archive endpoint (buildx)
 	WriteArchive(context.Context, *WriteArchiveRequest) (*WriteArchiveResponse, error)
+	// Create bind mount - bind mount a file or directory to another location
+	// Works like "mount --bind /source /target" inside the container
+	// Used for file bind mounts (VirtioFS only supports directory shares)
+	CreateBindMount(context.Context, *CreateBindMountRequest) (*CreateBindMountResponse, error)
 	mustEmbedUnimplementedFilesystemServiceServer()
 }
 
@@ -151,6 +170,9 @@ func (UnimplementedFilesystemServiceServer) ReadArchive(context.Context, *ReadAr
 }
 func (UnimplementedFilesystemServiceServer) WriteArchive(context.Context, *WriteArchiveRequest) (*WriteArchiveResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method WriteArchive not implemented")
+}
+func (UnimplementedFilesystemServiceServer) CreateBindMount(context.Context, *CreateBindMountRequest) (*CreateBindMountResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateBindMount not implemented")
 }
 func (UnimplementedFilesystemServiceServer) mustEmbedUnimplementedFilesystemServiceServer() {}
 func (UnimplementedFilesystemServiceServer) testEmbeddedByValue()                           {}
@@ -245,6 +267,24 @@ func _FilesystemService_WriteArchive_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _FilesystemService_CreateBindMount_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateBindMountRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FilesystemServiceServer).CreateBindMount(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FilesystemService_CreateBindMount_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FilesystemServiceServer).CreateBindMount(ctx, req.(*CreateBindMountRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // FilesystemService_ServiceDesc is the grpc.ServiceDesc for FilesystemService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -267,6 +307,10 @@ var FilesystemService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "WriteArchive",
 			Handler:    _FilesystemService_WriteArchive_Handler,
+		},
+		{
+			MethodName: "CreateBindMount",
+			Handler:    _FilesystemService_CreateBindMount_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

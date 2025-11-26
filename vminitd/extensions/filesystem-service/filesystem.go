@@ -13,9 +13,12 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -27,6 +30,82 @@ import (
 // Server implements the FilesystemService
 type Server struct {
 	pb.UnimplementedFilesystemServiceServer
+}
+
+// findContainerPID finds the PID of a container by searching /proc for ARCA_CONTAINER_ID
+func findContainerPID(containerID string) (int, error) {
+	entries, err := ioutil.ReadDir("/proc")
+	if err != nil {
+		return 0, fmt.Errorf("failed to read /proc: %w", err)
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		// Check if directory name is numeric (PID)
+		pid, err := strconv.Atoi(entry.Name())
+		if err != nil {
+			continue
+		}
+
+		// Read /proc/[pid]/environ to find ARCA_CONTAINER_ID
+		environPath := filepath.Join("/proc", entry.Name(), "environ")
+		environData, err := ioutil.ReadFile(environPath)
+		if err != nil {
+			continue
+		}
+
+		// environ is null-separated key=value pairs
+		for _, env := range bytes.Split(environData, []byte{0}) {
+			if bytes.HasPrefix(env, []byte("ARCA_CONTAINER_ID=")) {
+				foundID := string(bytes.TrimPrefix(env, []byte("ARCA_CONTAINER_ID=")))
+				if foundID == containerID {
+					return pid, nil
+				}
+			}
+		}
+	}
+
+	return 0, fmt.Errorf("container PID not found for ID: %s", containerID)
+}
+
+// withMountNamespace executes a function inside a mount namespace
+// Pattern similar to WireGuard's netns switching but for mount namespaces
+func withMountNamespace(nsPath string, fn func() error) error {
+	// Lock goroutine to OS thread for namespace operations
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	// Open current mount namespace to return to it later
+	rootMntFd, err := unix.Open("/proc/self/ns/mnt", unix.O_RDONLY, 0)
+	if err != nil {
+		return fmt.Errorf("failed to open root mount namespace: %w", err)
+	}
+	defer unix.Close(rootMntFd)
+
+	// Open target mount namespace
+	targetMntFd, err := unix.Open(nsPath, unix.O_RDONLY, 0)
+	if err != nil {
+		return fmt.Errorf("failed to open target mount namespace: %w", err)
+	}
+	defer unix.Close(targetMntFd)
+
+	// Enter target mount namespace
+	if err := unix.Setns(targetMntFd, unix.CLONE_NEWNS); err != nil {
+		return fmt.Errorf("failed to enter mount namespace: %w", err)
+	}
+
+	// Ensure we return to root namespace
+	defer func() {
+		if err := unix.Setns(rootMntFd, unix.CLONE_NEWNS); err != nil {
+			log.Printf("Warning: failed to return to root mount namespace: %v", err)
+		}
+	}()
+
+	// Execute the function inside the namespace
+	return fn()
 }
 
 // SyncFilesystem flushes all filesystem buffers to disk
@@ -354,6 +433,125 @@ func (s *Server) WriteArchive(ctx context.Context, req *pb.WriteArchiveRequest) 
 
 	log.Printf("WriteArchive complete")
 	return &pb.WriteArchiveResponse{
+		Success: true,
+	}, nil
+}
+
+// CreateBindMount creates a bind mount from source to target
+// Works like "mount --bind /source /target" inside the container
+// Used for file bind mounts (VirtioFS only supports directory shares)
+func (s *Server) CreateBindMount(ctx context.Context, req *pb.CreateBindMountRequest) (*pb.CreateBindMountResponse, error) {
+	log.Printf("CreateBindMount: containerID=%s source=%s target=%s readOnly=%v", req.ContainerId, req.Source, req.Target, req.ReadOnly)
+
+	// Find container PID by searching /proc for ARCA_CONTAINER_ID environment variable
+	containerPID, err := findContainerPID(req.ContainerId)
+	if err != nil {
+		errMsg := fmt.Sprintf("failed to find container PID: %v", err)
+		log.Printf("ERROR: %s", errMsg)
+		return &pb.CreateBindMountResponse{
+			Success: false,
+			Error:   errMsg,
+		}, nil
+	}
+	log.Printf("✓ Found container PID: %d", containerPID)
+
+	// Resolve target path to absolute VM path
+	// Target is container-relative (e.g., "/test.txt"), resolve to VM path (e.g., "/run/container/{id}/rootfs/test.txt")
+	targetAbsolute := fmt.Sprintf("/run/container/%s/rootfs%s", req.ContainerId, req.Target)
+	log.Printf("Resolved target path: %s -> %s", req.Target, targetAbsolute)
+
+	// All bind mount operations must happen inside the container's mount namespace
+	// The source file is mounted via VirtioFS inside the container's mount namespace
+	// The target file must be created inside the container's mount namespace
+	mntNsPath := fmt.Sprintf("/proc/%d/ns/mnt", containerPID)
+	log.Printf("Will perform all operations in container mount namespace: %s", mntNsPath)
+
+	// Perform all operations inside the container's mount namespace
+	err = withMountNamespace(mntNsPath, func() error {
+		log.Printf("Inside container mount namespace")
+
+		// Validate source exists
+		sourceInfo, err := os.Stat(req.Source)
+		if err != nil {
+			log.Printf("ERROR: source path does not exist: %v", err)
+			return fmt.Errorf("source path does not exist: %w", err)
+		}
+		log.Printf("✓ Source exists: %s (isDir=%v, size=%d)", req.Source, sourceInfo.IsDir(), sourceInfo.Size())
+
+		// Ensure parent directory of target exists
+		targetParent := filepath.Dir(targetAbsolute)
+		if err := os.MkdirAll(targetParent, 0755); err != nil {
+			log.Printf("ERROR: failed to create target parent directory: %v", err)
+			return fmt.Errorf("failed to create target parent directory: %w", err)
+		}
+		log.Printf("✓ Target parent directory exists: %s", targetParent)
+
+		// Check if target exists
+		targetInfo, err := os.Stat(targetAbsolute)
+		if err != nil {
+			if os.IsNotExist(err) {
+				// Create target matching source type
+				if sourceInfo.IsDir() {
+					log.Printf("Creating target directory: %s", targetAbsolute)
+					if err := os.Mkdir(targetAbsolute, 0755); err != nil {
+						log.Printf("ERROR: failed to create target directory: %v", err)
+						return fmt.Errorf("failed to create target directory: %w", err)
+					}
+					log.Printf("✓ Target directory created")
+				} else {
+					// Create empty file
+					log.Printf("Creating target file: %s", targetAbsolute)
+					f, err := os.Create(targetAbsolute)
+					if err != nil {
+						log.Printf("ERROR: failed to create target file: %v", err)
+						return fmt.Errorf("failed to create target file: %w", err)
+					}
+					f.Close()
+					log.Printf("✓ Target file created")
+				}
+			} else {
+				log.Printf("ERROR: failed to stat target: %v", err)
+				return fmt.Errorf("failed to stat target: %w", err)
+			}
+		} else {
+			log.Printf("✓ Target already exists: isDir=%v", targetInfo.IsDir())
+			// Target exists - verify types match
+			if sourceInfo.IsDir() != targetInfo.IsDir() {
+				log.Printf("ERROR: source and target type mismatch")
+				return fmt.Errorf("source and target must both be files or both be directories")
+			}
+		}
+
+		// Perform bind mount using syscall (we're already in the namespace)
+		log.Printf("Performing bind mount: %s -> %s", req.Source, targetAbsolute)
+		if err := unix.Mount(req.Source, targetAbsolute, "", unix.MS_BIND, ""); err != nil {
+			log.Printf("ERROR: failed to bind mount: %v", err)
+			return fmt.Errorf("failed to bind mount: %w", err)
+		}
+		log.Printf("✓ Bind mount successful")
+
+		// If read-only, remount with read-only flag
+		if req.ReadOnly {
+			log.Printf("Remounting as read-only...")
+			if err := unix.Mount("", targetAbsolute, "", unix.MS_BIND|unix.MS_REMOUNT|unix.MS_RDONLY, ""); err != nil {
+				log.Printf("ERROR: failed to remount as read-only: %v", err)
+				return fmt.Errorf("failed to remount as read-only: %w", err)
+			}
+			log.Printf("✓ Remounted as read-only")
+		}
+
+		log.Printf("Bind mount created successfully: %s -> %s (container path: %s)", req.Source, targetAbsolute, req.Target)
+		return nil
+	})
+
+	if err != nil {
+		return &pb.CreateBindMountResponse{
+			Success: false,
+			Error:   err.Error(),
+		}, nil
+	}
+
+	return &pb.CreateBindMountResponse{
 		Success: true,
 	}, nil
 }

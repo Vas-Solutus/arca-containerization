@@ -151,7 +151,20 @@ extension Mount {
         if let perms = createWithPerms {
             try mkdirAll(targetParent, perms)
         }
-        try mkdirAll(target, 0o755)
+
+        // Check if this is a file bind mount (signaled by "arca-file-bind" option)
+        // For file bind mounts, create an empty file at the target instead of a directory
+        let isFileBindMount = self.options.contains("arca-file-bind")
+        if isFileBindMount {
+            // Create parent directory if needed
+            try mkdirAll(targetParent, 0o755)
+            // Create empty file at target
+            if !FileManager.default.fileExists(atPath: target) {
+                _ = FileManager.default.createFile(atPath: target, contents: nil)
+            }
+        } else {
+            try mkdirAll(target, 0o755)
+        }
 
         if opts.flags & Int32(MS_REMOUNT) == 0 || !dataString.isEmpty {
             let result = _mount(self.source, target, self.type, UInt(originalFlags), dataString)

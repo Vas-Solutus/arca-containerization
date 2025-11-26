@@ -1,11 +1,22 @@
 #!/bin/bash
-# Build Arca Filesystem Service binary
+# Build Arca Filesystem Service binary for Linux ARM64
+
 set -e
 
-cd "$(dirname "$0")"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
 
-echo "Building arca-filesystem-service..."
-go build -o arca-filesystem-service ./cmd/arca-filesystem-service
+echo "Building arca-filesystem-service for Linux ARM64..."
 
-echo "✓ Build complete: arca-filesystem-service"
-ls -lh arca-filesystem-service
+# Cross-compile for Linux ARM64
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build \
+    -o arca-filesystem-service \
+    -ldflags="-s -w" \
+    ./cmd/arca-filesystem-service
+
+if [ ! -f arca-filesystem-service ]; then
+    echo "ERROR: Build failed - arca-filesystem-service binary not created"
+    exit 1
+fi
+
+echo "✓ Built arca-filesystem-service ($(du -h arca-filesystem-service | awk '{print $1}')"

@@ -35,6 +35,11 @@ service FilesystemService {
     // Works universally without requiring tar in container
     // Used for PUT /containers/{id}/archive endpoint (buildx)
     rpc WriteArchive(WriteArchiveRequest) returns (WriteArchiveResponse);
+
+    // Create bind mount - bind mount a file or directory to another location
+    // Works like "mount --bind /source /target" inside the container
+    // Used for file bind mounts (VirtioFS only supports directory shares)
+    rpc CreateBindMount(CreateBindMountRequest) returns (CreateBindMountResponse);
 }
 
 // Request to sync filesystem (flush all cached writes)
@@ -139,6 +144,31 @@ message WriteArchiveRequest {
 }
 
 message WriteArchiveResponse {
+    // Success status
+    bool success = 1;
+
+    // Error message if success = false
+    string error = 2;
+}
+
+// Request to create a bind mount inside the container
+message CreateBindMountRequest {
+    // Container ID (for resolving /run/container/{id}/rootfs path)
+    string container_id = 1;
+
+    // Source path inside VM (absolute path, e.g., "/mnt/arca-file-mounts/abc123/myfile.txt")
+    // Can be a file or directory
+    string source = 2;
+
+    // Target path relative to container root (e.g., "/test.txt" or "/app/config.yaml")
+    // Will be resolved to /run/container/{container_id}/rootfs{target}
+    string target = 3;
+
+    // Read-only mount (default: false for read-write)
+    bool read_only = 4;
+}
+
+message CreateBindMountResponse {
     // Success status
     bool success = 1;
 

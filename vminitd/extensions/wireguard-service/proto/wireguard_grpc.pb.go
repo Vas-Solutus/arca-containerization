@@ -5,7 +5,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.5.1
 // - protoc             v6.33.0
-// source: proto/wireguard.proto
+// source: wireguard.proto
 
 package proto
 
@@ -31,9 +31,6 @@ const (
 	WireGuardService_PublishPort_FullMethodName      = "/arca.wireguard.v1.WireGuardService/PublishPort"
 	WireGuardService_UnpublishPort_FullMethodName    = "/arca.wireguard.v1.WireGuardService/UnpublishPort"
 	WireGuardService_DumpNftables_FullMethodName     = "/arca.wireguard.v1.WireGuardService/DumpNftables"
-	WireGuardService_SyncFilesystem_FullMethodName   = "/arca.wireguard.v1.WireGuardService/SyncFilesystem"
-	WireGuardService_ReadArchive_FullMethodName      = "/arca.wireguard.v1.WireGuardService/ReadArchive"
-	WireGuardService_WriteArchive_FullMethodName     = "/arca.wireguard.v1.WireGuardService/WriteArchive"
 )
 
 // WireGuardServiceClient is the client API for WireGuardService service.
@@ -62,18 +59,6 @@ type WireGuardServiceClient interface {
 	UnpublishPort(ctx context.Context, in *UnpublishPortRequest, opts ...grpc.CallOption) (*UnpublishPortResponse, error)
 	// Dump nftables state for debugging (returns full ruleset with counters)
 	DumpNftables(ctx context.Context, in *DumpNftablesRequest, opts ...grpc.CallOption) (*DumpNftablesResponse, error)
-	// Sync filesystem (flush all cached writes to disk)
-	// Calls sync() syscall to ensure all filesystem buffers are written
-	// Used before reading container filesystem for accurate diff results
-	SyncFilesystem(ctx context.Context, in *SyncFilesystemRequest, opts ...grpc.CallOption) (*SyncFilesystemResponse, error)
-	// Read archive - create tar archive of filesystem path
-	// Works universally without requiring tar in container
-	// Used for GET /containers/{id}/archive endpoint
-	ReadArchive(ctx context.Context, in *ReadArchiveRequest, opts ...grpc.CallOption) (*ReadArchiveResponse, error)
-	// Write archive - extract tar archive to filesystem path
-	// Works universally without requiring tar in container
-	// Used for PUT /containers/{id}/archive endpoint
-	WriteArchive(ctx context.Context, in *WriteArchiveRequest, opts ...grpc.CallOption) (*WriteArchiveResponse, error)
 }
 
 type wireGuardServiceClient struct {
@@ -174,36 +159,6 @@ func (c *wireGuardServiceClient) DumpNftables(ctx context.Context, in *DumpNftab
 	return out, nil
 }
 
-func (c *wireGuardServiceClient) SyncFilesystem(ctx context.Context, in *SyncFilesystemRequest, opts ...grpc.CallOption) (*SyncFilesystemResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(SyncFilesystemResponse)
-	err := c.cc.Invoke(ctx, WireGuardService_SyncFilesystem_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *wireGuardServiceClient) ReadArchive(ctx context.Context, in *ReadArchiveRequest, opts ...grpc.CallOption) (*ReadArchiveResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ReadArchiveResponse)
-	err := c.cc.Invoke(ctx, WireGuardService_ReadArchive_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *wireGuardServiceClient) WriteArchive(ctx context.Context, in *WriteArchiveRequest, opts ...grpc.CallOption) (*WriteArchiveResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(WriteArchiveResponse)
-	err := c.cc.Invoke(ctx, WireGuardService_WriteArchive_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 // WireGuardServiceServer is the server API for WireGuardService service.
 // All implementations must embed UnimplementedWireGuardServiceServer
 // for forward compatibility.
@@ -230,18 +185,6 @@ type WireGuardServiceServer interface {
 	UnpublishPort(context.Context, *UnpublishPortRequest) (*UnpublishPortResponse, error)
 	// Dump nftables state for debugging (returns full ruleset with counters)
 	DumpNftables(context.Context, *DumpNftablesRequest) (*DumpNftablesResponse, error)
-	// Sync filesystem (flush all cached writes to disk)
-	// Calls sync() syscall to ensure all filesystem buffers are written
-	// Used before reading container filesystem for accurate diff results
-	SyncFilesystem(context.Context, *SyncFilesystemRequest) (*SyncFilesystemResponse, error)
-	// Read archive - create tar archive of filesystem path
-	// Works universally without requiring tar in container
-	// Used for GET /containers/{id}/archive endpoint
-	ReadArchive(context.Context, *ReadArchiveRequest) (*ReadArchiveResponse, error)
-	// Write archive - extract tar archive to filesystem path
-	// Works universally without requiring tar in container
-	// Used for PUT /containers/{id}/archive endpoint
-	WriteArchive(context.Context, *WriteArchiveRequest) (*WriteArchiveResponse, error)
 	mustEmbedUnimplementedWireGuardServiceServer()
 }
 
@@ -278,15 +221,6 @@ func (UnimplementedWireGuardServiceServer) UnpublishPort(context.Context, *Unpub
 }
 func (UnimplementedWireGuardServiceServer) DumpNftables(context.Context, *DumpNftablesRequest) (*DumpNftablesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DumpNftables not implemented")
-}
-func (UnimplementedWireGuardServiceServer) SyncFilesystem(context.Context, *SyncFilesystemRequest) (*SyncFilesystemResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method SyncFilesystem not implemented")
-}
-func (UnimplementedWireGuardServiceServer) ReadArchive(context.Context, *ReadArchiveRequest) (*ReadArchiveResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ReadArchive not implemented")
-}
-func (UnimplementedWireGuardServiceServer) WriteArchive(context.Context, *WriteArchiveRequest) (*WriteArchiveResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method WriteArchive not implemented")
 }
 func (UnimplementedWireGuardServiceServer) mustEmbedUnimplementedWireGuardServiceServer() {}
 func (UnimplementedWireGuardServiceServer) testEmbeddedByValue()                          {}
@@ -471,60 +405,6 @@ func _WireGuardService_DumpNftables_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
-func _WireGuardService_SyncFilesystem_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SyncFilesystemRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(WireGuardServiceServer).SyncFilesystem(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: WireGuardService_SyncFilesystem_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(WireGuardServiceServer).SyncFilesystem(ctx, req.(*SyncFilesystemRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _WireGuardService_ReadArchive_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ReadArchiveRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(WireGuardServiceServer).ReadArchive(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: WireGuardService_ReadArchive_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(WireGuardServiceServer).ReadArchive(ctx, req.(*ReadArchiveRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _WireGuardService_WriteArchive_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(WriteArchiveRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(WireGuardServiceServer).WriteArchive(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: WireGuardService_WriteArchive_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(WireGuardServiceServer).WriteArchive(ctx, req.(*WriteArchiveRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 // WireGuardService_ServiceDesc is the grpc.ServiceDesc for WireGuardService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -568,19 +448,7 @@ var WireGuardService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "DumpNftables",
 			Handler:    _WireGuardService_DumpNftables_Handler,
 		},
-		{
-			MethodName: "SyncFilesystem",
-			Handler:    _WireGuardService_SyncFilesystem_Handler,
-		},
-		{
-			MethodName: "ReadArchive",
-			Handler:    _WireGuardService_ReadArchive_Handler,
-		},
-		{
-			MethodName: "WriteArchive",
-			Handler:    _WireGuardService_WriteArchive_Handler,
-		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "proto/wireguard.proto",
+	Metadata: "wireguard.proto",
 }

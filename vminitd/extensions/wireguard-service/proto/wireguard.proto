@@ -68,6 +68,10 @@ message AddNetworkRequest {
 
     // Gateway IP for this network (e.g., "172.18.0.1")
     string gateway = 9;
+
+    // Host IP address for host.docker.internal DNS resolution (e.g., "192.168.2.100")
+    // This is the macOS host's LAN IP, allowing containers to reach host services
+    string host_ip = 10;
 }
 
 message AddNetworkResponse {

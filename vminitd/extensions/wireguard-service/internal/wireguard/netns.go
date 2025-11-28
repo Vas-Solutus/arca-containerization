@@ -264,17 +264,21 @@ func ConfigureNATForInternet() error {
 	// Get eth0's IP address to determine control plane subnet
 	addrs, err := netlink.AddrList(eth0, unix.AF_INET)
 	if err != nil || len(addrs) == 0 {
-		log.Printf("Warning: Could not determine eth0 IP, assuming 192.168.64.0/16 for control plane")
+		log.Printf("Warning: Could not determine eth0 IP, assuming 192.168.64.0/24 for control plane")
 	}
 
-	// vmnet typically uses 192.168.64.0/16 or 192.168.65.0/24
-	// We'll block the entire 192.168.64.0/16 range to be safe
-	controlPlaneSubnet := "192.168.64.0/16"
+	// vmnet typically uses 192.168.64.0/24 or similar
+	// We use the actual subnet from eth0's address to avoid blocking unrelated RFC1918 ranges
+	// (e.g., user's LAN at 192.168.2.0/24 should NOT be blocked)
+	controlPlaneSubnet := "192.168.64.0/24"
 	if len(addrs) > 0 {
-		// Extract the /16 subnet from eth0's IP
-		ip := addrs[0].IP
-		controlPlaneSubnet = fmt.Sprintf("%d.%d.0.0/16", ip[0], ip[1])
-		log.Printf("Detected control plane subnet from eth0: %s", controlPlaneSubnet)
+		// Use the actual subnet from eth0's address (includes proper mask)
+		addr := addrs[0]
+		// Get the network address by masking the IP with the subnet mask
+		network := addr.IPNet.IP.Mask(addr.IPNet.Mask)
+		ones, _ := addr.IPNet.Mask.Size()
+		controlPlaneSubnet = fmt.Sprintf("%s/%d", network.String(), ones)
+		log.Printf("Detected control plane subnet from eth0: %s (from %s)", controlPlaneSubnet, addr.IPNet.String())
 	}
 
 	// Parse subnets
@@ -429,9 +433,11 @@ func ConfigureNATForInternet() error {
 	})
 
 	// Rule: MASQUERADE traffic going out eth0 (except control plane subnet)
-	// Control plane is 192.168.0.0/16 - we must NOT masquerade traffic to it
+	// Control plane is the vmnet subnet (e.g., 192.168.64.0/16) - we must NOT masquerade traffic to it
 	// (DNS queries to gateway, etc.) or responses can't find their way back
-	log.Printf("Adding POSTROUTING rule: MASQUERADE on eth0 for internet access (excluding 192.168.0.0/16)")
+	// NOTE: We use the dynamically-detected controlNet, not a hardcoded 192.168.0.0/16,
+	// so that traffic to other RFC1918 networks (e.g., user's LAN at 192.168.2.0/24) is still masqueraded
+	log.Printf("Adding POSTROUTING rule: MASQUERADE on eth0 for internet access (excluding %s)", controlPlaneSubnet)
 	conn.AddRule(&nftables.Rule{
 		Table: table,
 		Chain: postRoutingChain,
@@ -450,20 +456,21 @@ func ConfigureNATForInternet() error {
 				Offset:       16, // IPv4 destination address offset
 				Len:          4,  // 4 bytes for IPv4 address
 			},
-			// Apply /16 netmask (255.255.0.0) to get network portion
+			// Apply netmask from detected control plane subnet to get network portion
 			&expr.Bitwise{
 				SourceRegister: 1,
 				DestRegister:   1,
 				Len:            4,
-				Mask:           []byte{0xff, 0xff, 0x00, 0x00}, // /16 netmask
+				Mask:           controlNet.Mask, // Use detected mask (typically /16)
 				Xor:            []byte{0x00, 0x00, 0x00, 0x00},
 			},
-			// Check destination network != 192.168.0.0/16 (control plane)
+			// Check destination network != control plane subnet (e.g., 192.168.64.0/16)
 			// If destination IS in control plane, rule doesn't match, no MASQUERADE
+			// Traffic to other RFC1918 networks (user's LAN, etc.) will be masqueraded
 			&expr.Cmp{
 				Op:       expr.CmpOpNeq,
 				Register: 1,
-				Data:     []byte{192, 168, 0, 0}, // 192.168.0.0
+				Data:     controlNet.IP.To4(), // Detected control plane network (e.g., 192.168.64.0)
 			},
 			// Verdict: MASQUERADE (only if destination is NOT control plane)
 			&expr.Masq{},

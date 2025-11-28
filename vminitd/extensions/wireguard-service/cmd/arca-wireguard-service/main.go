@@ -79,8 +79,6 @@ func (s *server) AddNetwork(ctx context.Context, req *pb.AddNetworkRequest) (*pb
 		hub, err := wireguard.NewHub(func(gatewayIP string) {
 			// Update DNS server to use vmnet gateway for upstream DNS
 			s.dnsServer.UpdateUpstreamDNS([]string{gatewayIP + ":53"})
-			// Register host.docker.internal -> gateway IP for host access (#24)
-			s.dnsResolver.AddEntry("_host", "host.docker.internal", "", gatewayIP, nil)
 		})
 		if err != nil {
 			s.mu.Unlock()
@@ -92,6 +90,15 @@ func (s *server) AddNetwork(ctx context.Context, req *pb.AddNetworkRequest) (*pb
 		}
 		s.hub = hub
 		log.Printf("Hub created successfully")
+
+		// Register host.docker.internal -> host's LAN IP for host access (#24)
+		// This allows containers to reach services running on the macOS host
+		if req.HostIp != "" {
+			s.dnsResolver.AddEntry("_host", "host.docker.internal", "", req.HostIp, nil)
+			log.Printf("Registered host.docker.internal -> %s", req.HostIp)
+		} else {
+			log.Printf("Warning: No host_ip provided, host.docker.internal will not be available")
+		}
 	}
 	s.mu.Unlock()
 

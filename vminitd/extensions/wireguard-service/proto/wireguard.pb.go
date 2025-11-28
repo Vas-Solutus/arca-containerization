@@ -5,7 +5,7 @@
 // versions:
 // 	protoc-gen-go v1.36.10
 // 	protoc        v6.33.0
-// source: proto/wireguard.proto
+// source: wireguard.proto
 
 package proto
 
@@ -45,14 +45,17 @@ type AddNetworkRequest struct {
 	// Network CIDR for routing (e.g., "172.18.0.0/16")
 	NetworkCidr string `protobuf:"bytes,8,opt,name=network_cidr,json=networkCidr,proto3" json:"network_cidr,omitempty"`
 	// Gateway IP for this network (e.g., "172.18.0.1")
-	Gateway       string `protobuf:"bytes,9,opt,name=gateway,proto3" json:"gateway,omitempty"`
+	Gateway string `protobuf:"bytes,9,opt,name=gateway,proto3" json:"gateway,omitempty"`
+	// Host IP address for host.docker.internal DNS resolution (e.g., "192.168.2.100")
+	// This is the macOS host's LAN IP, allowing containers to reach host services
+	HostIp        string `protobuf:"bytes,10,opt,name=host_ip,json=hostIp,proto3" json:"host_ip,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AddNetworkRequest) Reset() {
 	*x = AddNetworkRequest{}
-	mi := &file_proto_wireguard_proto_msgTypes[0]
+	mi := &file_wireguard_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -64,7 +67,7 @@ func (x *AddNetworkRequest) String() string {
 func (*AddNetworkRequest) ProtoMessage() {}
 
 func (x *AddNetworkRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_wireguard_proto_msgTypes[0]
+	mi := &file_wireguard_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -77,7 +80,7 @@ func (x *AddNetworkRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddNetworkRequest.ProtoReflect.Descriptor instead.
 func (*AddNetworkRequest) Descriptor() ([]byte, []int) {
-	return file_proto_wireguard_proto_rawDescGZIP(), []int{0}
+	return file_wireguard_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *AddNetworkRequest) GetNetworkId() string {
@@ -143,6 +146,13 @@ func (x *AddNetworkRequest) GetGateway() string {
 	return ""
 }
 
+func (x *AddNetworkRequest) GetHostIp() string {
+	if x != nil {
+		return x.HostIp
+	}
+	return ""
+}
+
 type AddNetworkResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Success status
@@ -163,7 +173,7 @@ type AddNetworkResponse struct {
 
 func (x *AddNetworkResponse) Reset() {
 	*x = AddNetworkResponse{}
-	mi := &file_proto_wireguard_proto_msgTypes[1]
+	mi := &file_wireguard_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -175,7 +185,7 @@ func (x *AddNetworkResponse) String() string {
 func (*AddNetworkResponse) ProtoMessage() {}
 
 func (x *AddNetworkResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_wireguard_proto_msgTypes[1]
+	mi := &file_wireguard_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -188,7 +198,7 @@ func (x *AddNetworkResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddNetworkResponse.ProtoReflect.Descriptor instead.
 func (*AddNetworkResponse) Descriptor() ([]byte, []int) {
-	return file_proto_wireguard_proto_rawDescGZIP(), []int{1}
+	return file_wireguard_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *AddNetworkResponse) GetSuccess() bool {
@@ -246,7 +256,7 @@ type RemoveNetworkRequest struct {
 
 func (x *RemoveNetworkRequest) Reset() {
 	*x = RemoveNetworkRequest{}
-	mi := &file_proto_wireguard_proto_msgTypes[2]
+	mi := &file_wireguard_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -258,7 +268,7 @@ func (x *RemoveNetworkRequest) String() string {
 func (*RemoveNetworkRequest) ProtoMessage() {}
 
 func (x *RemoveNetworkRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_wireguard_proto_msgTypes[2]
+	mi := &file_wireguard_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -271,7 +281,7 @@ func (x *RemoveNetworkRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveNetworkRequest.ProtoReflect.Descriptor instead.
 func (*RemoveNetworkRequest) Descriptor() ([]byte, []int) {
-	return file_proto_wireguard_proto_rawDescGZIP(), []int{2}
+	return file_wireguard_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *RemoveNetworkRequest) GetNetworkId() string {
@@ -302,7 +312,7 @@ type RemoveNetworkResponse struct {
 
 func (x *RemoveNetworkResponse) Reset() {
 	*x = RemoveNetworkResponse{}
-	mi := &file_proto_wireguard_proto_msgTypes[3]
+	mi := &file_wireguard_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -314,7 +324,7 @@ func (x *RemoveNetworkResponse) String() string {
 func (*RemoveNetworkResponse) ProtoMessage() {}
 
 func (x *RemoveNetworkResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_wireguard_proto_msgTypes[3]
+	mi := &file_wireguard_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -327,7 +337,7 @@ func (x *RemoveNetworkResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveNetworkResponse.ProtoReflect.Descriptor instead.
 func (*RemoveNetworkResponse) Descriptor() ([]byte, []int) {
-	return file_proto_wireguard_proto_rawDescGZIP(), []int{3}
+	return file_wireguard_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *RemoveNetworkResponse) GetSuccess() bool {
@@ -360,7 +370,7 @@ type GetStatusRequest struct {
 
 func (x *GetStatusRequest) Reset() {
 	*x = GetStatusRequest{}
-	mi := &file_proto_wireguard_proto_msgTypes[4]
+	mi := &file_wireguard_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -372,7 +382,7 @@ func (x *GetStatusRequest) String() string {
 func (*GetStatusRequest) ProtoMessage() {}
 
 func (x *GetStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_wireguard_proto_msgTypes[4]
+	mi := &file_wireguard_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -385,7 +395,7 @@ func (x *GetStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetStatusRequest.ProtoReflect.Descriptor instead.
 func (*GetStatusRequest) Descriptor() ([]byte, []int) {
-	return file_proto_wireguard_proto_rawDescGZIP(), []int{4}
+	return file_wireguard_proto_rawDescGZIP(), []int{4}
 }
 
 type GetStatusResponse struct {
@@ -404,7 +414,7 @@ type GetStatusResponse struct {
 
 func (x *GetStatusResponse) Reset() {
 	*x = GetStatusResponse{}
-	mi := &file_proto_wireguard_proto_msgTypes[5]
+	mi := &file_wireguard_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -416,7 +426,7 @@ func (x *GetStatusResponse) String() string {
 func (*GetStatusResponse) ProtoMessage() {}
 
 func (x *GetStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_wireguard_proto_msgTypes[5]
+	mi := &file_wireguard_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -429,7 +439,7 @@ func (x *GetStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetStatusResponse.ProtoReflect.Descriptor instead.
 func (*GetStatusResponse) Descriptor() ([]byte, []int) {
-	return file_proto_wireguard_proto_rawDescGZIP(), []int{5}
+	return file_wireguard_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *GetStatusResponse) GetVersion() string {
@@ -478,7 +488,7 @@ type InterfaceStatus struct {
 
 func (x *InterfaceStatus) Reset() {
 	*x = InterfaceStatus{}
-	mi := &file_proto_wireguard_proto_msgTypes[6]
+	mi := &file_wireguard_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -490,7 +500,7 @@ func (x *InterfaceStatus) String() string {
 func (*InterfaceStatus) ProtoMessage() {}
 
 func (x *InterfaceStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_wireguard_proto_msgTypes[6]
+	mi := &file_wireguard_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -503,7 +513,7 @@ func (x *InterfaceStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InterfaceStatus.ProtoReflect.Descriptor instead.
 func (*InterfaceStatus) Descriptor() ([]byte, []int) {
-	return file_proto_wireguard_proto_rawDescGZIP(), []int{6}
+	return file_wireguard_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *InterfaceStatus) GetNetworkId() string {
@@ -563,7 +573,7 @@ type PeerStatus struct {
 
 func (x *PeerStatus) Reset() {
 	*x = PeerStatus{}
-	mi := &file_proto_wireguard_proto_msgTypes[7]
+	mi := &file_wireguard_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -575,7 +585,7 @@ func (x *PeerStatus) String() string {
 func (*PeerStatus) ProtoMessage() {}
 
 func (x *PeerStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_wireguard_proto_msgTypes[7]
+	mi := &file_wireguard_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -588,7 +598,7 @@ func (x *PeerStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PeerStatus.ProtoReflect.Descriptor instead.
 func (*PeerStatus) Descriptor() ([]byte, []int) {
-	return file_proto_wireguard_proto_rawDescGZIP(), []int{7}
+	return file_wireguard_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *PeerStatus) GetNetworkId() string {
@@ -654,7 +664,7 @@ type TransferStats struct {
 
 func (x *TransferStats) Reset() {
 	*x = TransferStats{}
-	mi := &file_proto_wireguard_proto_msgTypes[8]
+	mi := &file_wireguard_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -666,7 +676,7 @@ func (x *TransferStats) String() string {
 func (*TransferStats) ProtoMessage() {}
 
 func (x *TransferStats) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_wireguard_proto_msgTypes[8]
+	mi := &file_wireguard_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -679,7 +689,7 @@ func (x *TransferStats) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TransferStats.ProtoReflect.Descriptor instead.
 func (*TransferStats) Descriptor() ([]byte, []int) {
-	return file_proto_wireguard_proto_rawDescGZIP(), []int{8}
+	return file_wireguard_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *TransferStats) GetBytesReceived() uint64 {
@@ -712,7 +722,7 @@ type GetVmnetEndpointRequest struct {
 
 func (x *GetVmnetEndpointRequest) Reset() {
 	*x = GetVmnetEndpointRequest{}
-	mi := &file_proto_wireguard_proto_msgTypes[9]
+	mi := &file_wireguard_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -724,7 +734,7 @@ func (x *GetVmnetEndpointRequest) String() string {
 func (*GetVmnetEndpointRequest) ProtoMessage() {}
 
 func (x *GetVmnetEndpointRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_wireguard_proto_msgTypes[9]
+	mi := &file_wireguard_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -737,7 +747,7 @@ func (x *GetVmnetEndpointRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetVmnetEndpointRequest.ProtoReflect.Descriptor instead.
 func (*GetVmnetEndpointRequest) Descriptor() ([]byte, []int) {
-	return file_proto_wireguard_proto_rawDescGZIP(), []int{9}
+	return file_wireguard_proto_rawDescGZIP(), []int{9}
 }
 
 type GetVmnetEndpointResponse struct {
@@ -754,7 +764,7 @@ type GetVmnetEndpointResponse struct {
 
 func (x *GetVmnetEndpointResponse) Reset() {
 	*x = GetVmnetEndpointResponse{}
-	mi := &file_proto_wireguard_proto_msgTypes[10]
+	mi := &file_wireguard_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -766,7 +776,7 @@ func (x *GetVmnetEndpointResponse) String() string {
 func (*GetVmnetEndpointResponse) ProtoMessage() {}
 
 func (x *GetVmnetEndpointResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_wireguard_proto_msgTypes[10]
+	mi := &file_wireguard_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -779,7 +789,7 @@ func (x *GetVmnetEndpointResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetVmnetEndpointResponse.ProtoReflect.Descriptor instead.
 func (*GetVmnetEndpointResponse) Descriptor() ([]byte, []int) {
-	return file_proto_wireguard_proto_rawDescGZIP(), []int{10}
+	return file_wireguard_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *GetVmnetEndpointResponse) GetSuccess() bool {
@@ -828,7 +838,7 @@ type AddPeerRequest struct {
 
 func (x *AddPeerRequest) Reset() {
 	*x = AddPeerRequest{}
-	mi := &file_proto_wireguard_proto_msgTypes[11]
+	mi := &file_wireguard_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -840,7 +850,7 @@ func (x *AddPeerRequest) String() string {
 func (*AddPeerRequest) ProtoMessage() {}
 
 func (x *AddPeerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_wireguard_proto_msgTypes[11]
+	mi := &file_wireguard_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -853,7 +863,7 @@ func (x *AddPeerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddPeerRequest.ProtoReflect.Descriptor instead.
 func (*AddPeerRequest) Descriptor() ([]byte, []int) {
-	return file_proto_wireguard_proto_rawDescGZIP(), []int{11}
+	return file_wireguard_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *AddPeerRequest) GetNetworkId() string {
@@ -926,7 +936,7 @@ type AddPeerResponse struct {
 
 func (x *AddPeerResponse) Reset() {
 	*x = AddPeerResponse{}
-	mi := &file_proto_wireguard_proto_msgTypes[12]
+	mi := &file_wireguard_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -938,7 +948,7 @@ func (x *AddPeerResponse) String() string {
 func (*AddPeerResponse) ProtoMessage() {}
 
 func (x *AddPeerResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_wireguard_proto_msgTypes[12]
+	mi := &file_wireguard_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -951,7 +961,7 @@ func (x *AddPeerResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddPeerResponse.ProtoReflect.Descriptor instead.
 func (*AddPeerResponse) Descriptor() ([]byte, []int) {
-	return file_proto_wireguard_proto_rawDescGZIP(), []int{12}
+	return file_wireguard_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *AddPeerResponse) GetSuccess() bool {
@@ -992,7 +1002,7 @@ type RemovePeerRequest struct {
 
 func (x *RemovePeerRequest) Reset() {
 	*x = RemovePeerRequest{}
-	mi := &file_proto_wireguard_proto_msgTypes[13]
+	mi := &file_wireguard_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1004,7 +1014,7 @@ func (x *RemovePeerRequest) String() string {
 func (*RemovePeerRequest) ProtoMessage() {}
 
 func (x *RemovePeerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_wireguard_proto_msgTypes[13]
+	mi := &file_wireguard_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1017,7 +1027,7 @@ func (x *RemovePeerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemovePeerRequest.ProtoReflect.Descriptor instead.
 func (*RemovePeerRequest) Descriptor() ([]byte, []int) {
-	return file_proto_wireguard_proto_rawDescGZIP(), []int{13}
+	return file_wireguard_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *RemovePeerRequest) GetNetworkId() string {
@@ -1062,7 +1072,7 @@ type RemovePeerResponse struct {
 
 func (x *RemovePeerResponse) Reset() {
 	*x = RemovePeerResponse{}
-	mi := &file_proto_wireguard_proto_msgTypes[14]
+	mi := &file_wireguard_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1074,7 +1084,7 @@ func (x *RemovePeerResponse) String() string {
 func (*RemovePeerResponse) ProtoMessage() {}
 
 func (x *RemovePeerResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_wireguard_proto_msgTypes[14]
+	mi := &file_wireguard_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1087,7 +1097,7 @@ func (x *RemovePeerResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemovePeerResponse.ProtoReflect.Descriptor instead.
 func (*RemovePeerResponse) Descriptor() ([]byte, []int) {
-	return file_proto_wireguard_proto_rawDescGZIP(), []int{14}
+	return file_wireguard_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *RemovePeerResponse) GetSuccess() bool {
@@ -1128,7 +1138,7 @@ type PublishPortRequest struct {
 
 func (x *PublishPortRequest) Reset() {
 	*x = PublishPortRequest{}
-	mi := &file_proto_wireguard_proto_msgTypes[15]
+	mi := &file_wireguard_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1140,7 +1150,7 @@ func (x *PublishPortRequest) String() string {
 func (*PublishPortRequest) ProtoMessage() {}
 
 func (x *PublishPortRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_wireguard_proto_msgTypes[15]
+	mi := &file_wireguard_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1153,7 +1163,7 @@ func (x *PublishPortRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PublishPortRequest.ProtoReflect.Descriptor instead.
 func (*PublishPortRequest) Descriptor() ([]byte, []int) {
-	return file_proto_wireguard_proto_rawDescGZIP(), []int{15}
+	return file_wireguard_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *PublishPortRequest) GetProtocol() string {
@@ -1196,7 +1206,7 @@ type PublishPortResponse struct {
 
 func (x *PublishPortResponse) Reset() {
 	*x = PublishPortResponse{}
-	mi := &file_proto_wireguard_proto_msgTypes[16]
+	mi := &file_wireguard_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1208,7 +1218,7 @@ func (x *PublishPortResponse) String() string {
 func (*PublishPortResponse) ProtoMessage() {}
 
 func (x *PublishPortResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_wireguard_proto_msgTypes[16]
+	mi := &file_wireguard_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1221,7 +1231,7 @@ func (x *PublishPortResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PublishPortResponse.ProtoReflect.Descriptor instead.
 func (*PublishPortResponse) Descriptor() ([]byte, []int) {
-	return file_proto_wireguard_proto_rawDescGZIP(), []int{16}
+	return file_wireguard_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *PublishPortResponse) GetSuccess() bool {
@@ -1251,7 +1261,7 @@ type UnpublishPortRequest struct {
 
 func (x *UnpublishPortRequest) Reset() {
 	*x = UnpublishPortRequest{}
-	mi := &file_proto_wireguard_proto_msgTypes[17]
+	mi := &file_wireguard_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1263,7 +1273,7 @@ func (x *UnpublishPortRequest) String() string {
 func (*UnpublishPortRequest) ProtoMessage() {}
 
 func (x *UnpublishPortRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_wireguard_proto_msgTypes[17]
+	mi := &file_wireguard_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1276,7 +1286,7 @@ func (x *UnpublishPortRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnpublishPortRequest.ProtoReflect.Descriptor instead.
 func (*UnpublishPortRequest) Descriptor() ([]byte, []int) {
-	return file_proto_wireguard_proto_rawDescGZIP(), []int{17}
+	return file_wireguard_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *UnpublishPortRequest) GetProtocol() string {
@@ -1305,7 +1315,7 @@ type UnpublishPortResponse struct {
 
 func (x *UnpublishPortResponse) Reset() {
 	*x = UnpublishPortResponse{}
-	mi := &file_proto_wireguard_proto_msgTypes[18]
+	mi := &file_wireguard_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1317,7 +1327,7 @@ func (x *UnpublishPortResponse) String() string {
 func (*UnpublishPortResponse) ProtoMessage() {}
 
 func (x *UnpublishPortResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_wireguard_proto_msgTypes[18]
+	mi := &file_wireguard_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1330,7 +1340,7 @@ func (x *UnpublishPortResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnpublishPortResponse.ProtoReflect.Descriptor instead.
 func (*UnpublishPortResponse) Descriptor() ([]byte, []int) {
-	return file_proto_wireguard_proto_rawDescGZIP(), []int{18}
+	return file_wireguard_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *UnpublishPortResponse) GetSuccess() bool {
@@ -1356,7 +1366,7 @@ type DumpNftablesRequest struct {
 
 func (x *DumpNftablesRequest) Reset() {
 	*x = DumpNftablesRequest{}
-	mi := &file_proto_wireguard_proto_msgTypes[19]
+	mi := &file_wireguard_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1368,7 +1378,7 @@ func (x *DumpNftablesRequest) String() string {
 func (*DumpNftablesRequest) ProtoMessage() {}
 
 func (x *DumpNftablesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_wireguard_proto_msgTypes[19]
+	mi := &file_wireguard_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1381,7 +1391,7 @@ func (x *DumpNftablesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DumpNftablesRequest.ProtoReflect.Descriptor instead.
 func (*DumpNftablesRequest) Descriptor() ([]byte, []int) {
-	return file_proto_wireguard_proto_rawDescGZIP(), []int{19}
+	return file_wireguard_proto_rawDescGZIP(), []int{19}
 }
 
 type DumpNftablesResponse struct {
@@ -1399,7 +1409,7 @@ type DumpNftablesResponse struct {
 
 func (x *DumpNftablesResponse) Reset() {
 	*x = DumpNftablesResponse{}
-	mi := &file_proto_wireguard_proto_msgTypes[20]
+	mi := &file_wireguard_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1411,7 +1421,7 @@ func (x *DumpNftablesResponse) String() string {
 func (*DumpNftablesResponse) ProtoMessage() {}
 
 func (x *DumpNftablesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_wireguard_proto_msgTypes[20]
+	mi := &file_wireguard_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1424,7 +1434,7 @@ func (x *DumpNftablesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DumpNftablesResponse.ProtoReflect.Descriptor instead.
 func (*DumpNftablesResponse) Descriptor() ([]byte, []int) {
-	return file_proto_wireguard_proto_rawDescGZIP(), []int{20}
+	return file_wireguard_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *DumpNftablesResponse) GetSuccess() bool {
@@ -1448,429 +1458,11 @@ func (x *DumpNftablesResponse) GetRuleset() string {
 	return ""
 }
 
-// Request to sync filesystem (flush all cached writes)
-type SyncFilesystemRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
+var File_wireguard_proto protoreflect.FileDescriptor
 
-func (x *SyncFilesystemRequest) Reset() {
-	*x = SyncFilesystemRequest{}
-	mi := &file_proto_wireguard_proto_msgTypes[21]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SyncFilesystemRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SyncFilesystemRequest) ProtoMessage() {}
-
-func (x *SyncFilesystemRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_wireguard_proto_msgTypes[21]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SyncFilesystemRequest.ProtoReflect.Descriptor instead.
-func (*SyncFilesystemRequest) Descriptor() ([]byte, []int) {
-	return file_proto_wireguard_proto_rawDescGZIP(), []int{21}
-}
-
-type SyncFilesystemResponse struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Success status
-	Success bool `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
-	// Error message if success = false
-	Error         string `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *SyncFilesystemResponse) Reset() {
-	*x = SyncFilesystemResponse{}
-	mi := &file_proto_wireguard_proto_msgTypes[22]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SyncFilesystemResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SyncFilesystemResponse) ProtoMessage() {}
-
-func (x *SyncFilesystemResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_wireguard_proto_msgTypes[22]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SyncFilesystemResponse.ProtoReflect.Descriptor instead.
-func (*SyncFilesystemResponse) Descriptor() ([]byte, []int) {
-	return file_proto_wireguard_proto_rawDescGZIP(), []int{22}
-}
-
-func (x *SyncFilesystemResponse) GetSuccess() bool {
-	if x != nil {
-		return x.Success
-	}
-	return false
-}
-
-func (x *SyncFilesystemResponse) GetError() string {
-	if x != nil {
-		return x.Error
-	}
-	return ""
-}
-
-// Request to read archive from filesystem path
-type ReadArchiveRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Container ID (for resolving /run/container/{id}/rootfs path)
-	ContainerId string `protobuf:"bytes,1,opt,name=container_id,json=containerId,proto3" json:"container_id,omitempty"`
-	// Path to file or directory to archive (e.g., "/tmp/myfile.txt" or "/etc")
-	Path          string `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ReadArchiveRequest) Reset() {
-	*x = ReadArchiveRequest{}
-	mi := &file_proto_wireguard_proto_msgTypes[23]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ReadArchiveRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ReadArchiveRequest) ProtoMessage() {}
-
-func (x *ReadArchiveRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_wireguard_proto_msgTypes[23]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ReadArchiveRequest.ProtoReflect.Descriptor instead.
-func (*ReadArchiveRequest) Descriptor() ([]byte, []int) {
-	return file_proto_wireguard_proto_rawDescGZIP(), []int{23}
-}
-
-func (x *ReadArchiveRequest) GetContainerId() string {
-	if x != nil {
-		return x.ContainerId
-	}
-	return ""
-}
-
-func (x *ReadArchiveRequest) GetPath() string {
-	if x != nil {
-		return x.Path
-	}
-	return ""
-}
-
-type ReadArchiveResponse struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Success status
-	Success bool `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
-	// Error message if success = false
-	Error string `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
-	// Tar archive data (gzip compressed)
-	TarData []byte `protobuf:"bytes,3,opt,name=tar_data,json=tarData,proto3" json:"tar_data,omitempty"`
-	// File stat information (for X-Docker-Container-Path-Stat header)
-	Stat          *PathStat `protobuf:"bytes,4,opt,name=stat,proto3" json:"stat,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ReadArchiveResponse) Reset() {
-	*x = ReadArchiveResponse{}
-	mi := &file_proto_wireguard_proto_msgTypes[24]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ReadArchiveResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ReadArchiveResponse) ProtoMessage() {}
-
-func (x *ReadArchiveResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_wireguard_proto_msgTypes[24]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ReadArchiveResponse.ProtoReflect.Descriptor instead.
-func (*ReadArchiveResponse) Descriptor() ([]byte, []int) {
-	return file_proto_wireguard_proto_rawDescGZIP(), []int{24}
-}
-
-func (x *ReadArchiveResponse) GetSuccess() bool {
-	if x != nil {
-		return x.Success
-	}
-	return false
-}
-
-func (x *ReadArchiveResponse) GetError() string {
-	if x != nil {
-		return x.Error
-	}
-	return ""
-}
-
-func (x *ReadArchiveResponse) GetTarData() []byte {
-	if x != nil {
-		return x.TarData
-	}
-	return nil
-}
-
-func (x *ReadArchiveResponse) GetStat() *PathStat {
-	if x != nil {
-		return x.Stat
-	}
-	return nil
-}
-
-// File stat information for archived paths
-type PathStat struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// File or directory name
-	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	// File size in bytes
-	Size int64 `protobuf:"varint,2,opt,name=size,proto3" json:"size,omitempty"`
-	// File mode/permissions (os.FileMode as uint32)
-	Mode uint32 `protobuf:"varint,3,opt,name=mode,proto3" json:"mode,omitempty"`
-	// Modification time (RFC3339 format: "2006-01-02T15:04:05Z07:00")
-	Mtime string `protobuf:"bytes,4,opt,name=mtime,proto3" json:"mtime,omitempty"`
-	// Symbolic link target (empty if not a symlink)
-	LinkTarget    string `protobuf:"bytes,5,opt,name=link_target,json=linkTarget,proto3" json:"link_target,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *PathStat) Reset() {
-	*x = PathStat{}
-	mi := &file_proto_wireguard_proto_msgTypes[25]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *PathStat) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*PathStat) ProtoMessage() {}
-
-func (x *PathStat) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_wireguard_proto_msgTypes[25]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use PathStat.ProtoReflect.Descriptor instead.
-func (*PathStat) Descriptor() ([]byte, []int) {
-	return file_proto_wireguard_proto_rawDescGZIP(), []int{25}
-}
-
-func (x *PathStat) GetName() string {
-	if x != nil {
-		return x.Name
-	}
-	return ""
-}
-
-func (x *PathStat) GetSize() int64 {
-	if x != nil {
-		return x.Size
-	}
-	return 0
-}
-
-func (x *PathStat) GetMode() uint32 {
-	if x != nil {
-		return x.Mode
-	}
-	return 0
-}
-
-func (x *PathStat) GetMtime() string {
-	if x != nil {
-		return x.Mtime
-	}
-	return ""
-}
-
-func (x *PathStat) GetLinkTarget() string {
-	if x != nil {
-		return x.LinkTarget
-	}
-	return ""
-}
-
-// Request to write archive to filesystem path
-type WriteArchiveRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Container ID (for resolving /run/container/{id}/rootfs path)
-	ContainerId string `protobuf:"bytes,1,opt,name=container_id,json=containerId,proto3" json:"container_id,omitempty"`
-	// Destination path where archive should be extracted (e.g., "/tmp")
-	Path string `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
-	// Tar archive data to extract
-	TarData       []byte `protobuf:"bytes,3,opt,name=tar_data,json=tarData,proto3" json:"tar_data,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *WriteArchiveRequest) Reset() {
-	*x = WriteArchiveRequest{}
-	mi := &file_proto_wireguard_proto_msgTypes[26]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *WriteArchiveRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*WriteArchiveRequest) ProtoMessage() {}
-
-func (x *WriteArchiveRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_wireguard_proto_msgTypes[26]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use WriteArchiveRequest.ProtoReflect.Descriptor instead.
-func (*WriteArchiveRequest) Descriptor() ([]byte, []int) {
-	return file_proto_wireguard_proto_rawDescGZIP(), []int{26}
-}
-
-func (x *WriteArchiveRequest) GetContainerId() string {
-	if x != nil {
-		return x.ContainerId
-	}
-	return ""
-}
-
-func (x *WriteArchiveRequest) GetPath() string {
-	if x != nil {
-		return x.Path
-	}
-	return ""
-}
-
-func (x *WriteArchiveRequest) GetTarData() []byte {
-	if x != nil {
-		return x.TarData
-	}
-	return nil
-}
-
-type WriteArchiveResponse struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Success status
-	Success bool `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
-	// Error message if success = false
-	Error         string `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *WriteArchiveResponse) Reset() {
-	*x = WriteArchiveResponse{}
-	mi := &file_proto_wireguard_proto_msgTypes[27]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *WriteArchiveResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*WriteArchiveResponse) ProtoMessage() {}
-
-func (x *WriteArchiveResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_wireguard_proto_msgTypes[27]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use WriteArchiveResponse.ProtoReflect.Descriptor instead.
-func (*WriteArchiveResponse) Descriptor() ([]byte, []int) {
-	return file_proto_wireguard_proto_rawDescGZIP(), []int{27}
-}
-
-func (x *WriteArchiveResponse) GetSuccess() bool {
-	if x != nil {
-		return x.Success
-	}
-	return false
-}
-
-func (x *WriteArchiveResponse) GetError() string {
-	if x != nil {
-		return x.Error
-	}
-	return ""
-}
-
-var File_proto_wireguard_proto protoreflect.FileDescriptor
-
-const file_proto_wireguard_proto_rawDesc = "" +
+const file_wireguard_proto_rawDesc = "" +
 	"\n" +
-	"\x15proto/wireguard.proto\x12\x11arca.wireguard.v1\"\xc2\x02\n" +
+	"\x0fwireguard.proto\x12\x11arca.wireguard.v1\"\xdb\x02\n" +
 	"\x11AddNetworkRequest\x12\x1d\n" +
 	"\n" +
 	"network_id\x18\x01 \x01(\tR\tnetworkId\x12#\n" +
@@ -1884,7 +1476,9 @@ const file_proto_wireguard_proto_rawDesc = "" +
 	"\n" +
 	"ip_address\x18\a \x01(\tR\tipAddress\x12!\n" +
 	"\fnetwork_cidr\x18\b \x01(\tR\vnetworkCidr\x12\x18\n" +
-	"\agateway\x18\t \x01(\tR\agateway\"\xd2\x01\n" +
+	"\agateway\x18\t \x01(\tR\agateway\x12\x17\n" +
+	"\ahost_ip\x18\n" +
+	" \x01(\tR\x06hostIp\"\xd2\x01\n" +
 	"\x12AddNetworkResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\x12%\n" +
@@ -1983,33 +1577,7 @@ const file_proto_wireguard_proto_rawDesc = "" +
 	"\x14DumpNftablesResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\x12\x18\n" +
-	"\aruleset\x18\x03 \x01(\tR\aruleset\"\x17\n" +
-	"\x15SyncFilesystemRequest\"H\n" +
-	"\x16SyncFilesystemResponse\x12\x18\n" +
-	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error\"K\n" +
-	"\x12ReadArchiveRequest\x12!\n" +
-	"\fcontainer_id\x18\x01 \x01(\tR\vcontainerId\x12\x12\n" +
-	"\x04path\x18\x02 \x01(\tR\x04path\"\x91\x01\n" +
-	"\x13ReadArchiveResponse\x12\x18\n" +
-	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error\x12\x19\n" +
-	"\btar_data\x18\x03 \x01(\fR\atarData\x12/\n" +
-	"\x04stat\x18\x04 \x01(\v2\x1b.arca.wireguard.v1.PathStatR\x04stat\"}\n" +
-	"\bPathStat\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
-	"\x04size\x18\x02 \x01(\x03R\x04size\x12\x12\n" +
-	"\x04mode\x18\x03 \x01(\rR\x04mode\x12\x14\n" +
-	"\x05mtime\x18\x04 \x01(\tR\x05mtime\x12\x1f\n" +
-	"\vlink_target\x18\x05 \x01(\tR\n" +
-	"linkTarget\"g\n" +
-	"\x13WriteArchiveRequest\x12!\n" +
-	"\fcontainer_id\x18\x01 \x01(\tR\vcontainerId\x12\x12\n" +
-	"\x04path\x18\x02 \x01(\tR\x04path\x12\x19\n" +
-	"\btar_data\x18\x03 \x01(\fR\atarData\"F\n" +
-	"\x14WriteArchiveResponse\x12\x18\n" +
-	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error2\x8c\t\n" +
+	"\aruleset\x18\x03 \x01(\tR\aruleset2\xe6\x06\n" +
 	"\x10WireGuardService\x12Y\n" +
 	"\n" +
 	"AddNetwork\x12$.arca.wireguard.v1.AddNetworkRequest\x1a%.arca.wireguard.v1.AddNetworkResponse\x12b\n" +
@@ -2021,25 +1589,22 @@ const file_proto_wireguard_proto_rawDesc = "" +
 	"\x10GetVmnetEndpoint\x12*.arca.wireguard.v1.GetVmnetEndpointRequest\x1a+.arca.wireguard.v1.GetVmnetEndpointResponse\x12\\\n" +
 	"\vPublishPort\x12%.arca.wireguard.v1.PublishPortRequest\x1a&.arca.wireguard.v1.PublishPortResponse\x12b\n" +
 	"\rUnpublishPort\x12'.arca.wireguard.v1.UnpublishPortRequest\x1a(.arca.wireguard.v1.UnpublishPortResponse\x12_\n" +
-	"\fDumpNftables\x12&.arca.wireguard.v1.DumpNftablesRequest\x1a'.arca.wireguard.v1.DumpNftablesResponse\x12e\n" +
-	"\x0eSyncFilesystem\x12(.arca.wireguard.v1.SyncFilesystemRequest\x1a).arca.wireguard.v1.SyncFilesystemResponse\x12\\\n" +
-	"\vReadArchive\x12%.arca.wireguard.v1.ReadArchiveRequest\x1a&.arca.wireguard.v1.ReadArchiveResponse\x12_\n" +
-	"\fWriteArchive\x12&.arca.wireguard.v1.WriteArchiveRequest\x1a'.arca.wireguard.v1.WriteArchiveResponseB5Z3github.com/vas-solutus/arca-wireguard-service/protob\x06proto3"
+	"\fDumpNftables\x12&.arca.wireguard.v1.DumpNftablesRequest\x1a'.arca.wireguard.v1.DumpNftablesResponseB5Z3github.com/vas-solutus/arca-wireguard-service/protob\x06proto3"
 
 var (
-	file_proto_wireguard_proto_rawDescOnce sync.Once
-	file_proto_wireguard_proto_rawDescData []byte
+	file_wireguard_proto_rawDescOnce sync.Once
+	file_wireguard_proto_rawDescData []byte
 )
 
-func file_proto_wireguard_proto_rawDescGZIP() []byte {
-	file_proto_wireguard_proto_rawDescOnce.Do(func() {
-		file_proto_wireguard_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_proto_wireguard_proto_rawDesc), len(file_proto_wireguard_proto_rawDesc)))
+func file_wireguard_proto_rawDescGZIP() []byte {
+	file_wireguard_proto_rawDescOnce.Do(func() {
+		file_wireguard_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_wireguard_proto_rawDesc), len(file_wireguard_proto_rawDesc)))
 	})
-	return file_proto_wireguard_proto_rawDescData
+	return file_wireguard_proto_rawDescData
 }
 
-var file_proto_wireguard_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
-var file_proto_wireguard_proto_goTypes = []any{
+var file_wireguard_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
+var file_wireguard_proto_goTypes = []any{
 	(*AddNetworkRequest)(nil),        // 0: arca.wireguard.v1.AddNetworkRequest
 	(*AddNetworkResponse)(nil),       // 1: arca.wireguard.v1.AddNetworkResponse
 	(*RemoveNetworkRequest)(nil),     // 2: arca.wireguard.v1.RemoveNetworkRequest
@@ -2061,70 +1626,56 @@ var file_proto_wireguard_proto_goTypes = []any{
 	(*UnpublishPortResponse)(nil),    // 18: arca.wireguard.v1.UnpublishPortResponse
 	(*DumpNftablesRequest)(nil),      // 19: arca.wireguard.v1.DumpNftablesRequest
 	(*DumpNftablesResponse)(nil),     // 20: arca.wireguard.v1.DumpNftablesResponse
-	(*SyncFilesystemRequest)(nil),    // 21: arca.wireguard.v1.SyncFilesystemRequest
-	(*SyncFilesystemResponse)(nil),   // 22: arca.wireguard.v1.SyncFilesystemResponse
-	(*ReadArchiveRequest)(nil),       // 23: arca.wireguard.v1.ReadArchiveRequest
-	(*ReadArchiveResponse)(nil),      // 24: arca.wireguard.v1.ReadArchiveResponse
-	(*PathStat)(nil),                 // 25: arca.wireguard.v1.PathStat
-	(*WriteArchiveRequest)(nil),      // 26: arca.wireguard.v1.WriteArchiveRequest
-	(*WriteArchiveResponse)(nil),     // 27: arca.wireguard.v1.WriteArchiveResponse
 }
-var file_proto_wireguard_proto_depIdxs = []int32{
+var file_wireguard_proto_depIdxs = []int32{
 	6,  // 0: arca.wireguard.v1.GetStatusResponse.interfaces:type_name -> arca.wireguard.v1.InterfaceStatus
 	7,  // 1: arca.wireguard.v1.GetStatusResponse.peers:type_name -> arca.wireguard.v1.PeerStatus
 	8,  // 2: arca.wireguard.v1.PeerStatus.stats:type_name -> arca.wireguard.v1.TransferStats
-	25, // 3: arca.wireguard.v1.ReadArchiveResponse.stat:type_name -> arca.wireguard.v1.PathStat
-	0,  // 4: arca.wireguard.v1.WireGuardService.AddNetwork:input_type -> arca.wireguard.v1.AddNetworkRequest
-	2,  // 5: arca.wireguard.v1.WireGuardService.RemoveNetwork:input_type -> arca.wireguard.v1.RemoveNetworkRequest
-	11, // 6: arca.wireguard.v1.WireGuardService.AddPeer:input_type -> arca.wireguard.v1.AddPeerRequest
-	13, // 7: arca.wireguard.v1.WireGuardService.RemovePeer:input_type -> arca.wireguard.v1.RemovePeerRequest
-	4,  // 8: arca.wireguard.v1.WireGuardService.GetStatus:input_type -> arca.wireguard.v1.GetStatusRequest
-	9,  // 9: arca.wireguard.v1.WireGuardService.GetVmnetEndpoint:input_type -> arca.wireguard.v1.GetVmnetEndpointRequest
-	15, // 10: arca.wireguard.v1.WireGuardService.PublishPort:input_type -> arca.wireguard.v1.PublishPortRequest
-	17, // 11: arca.wireguard.v1.WireGuardService.UnpublishPort:input_type -> arca.wireguard.v1.UnpublishPortRequest
-	19, // 12: arca.wireguard.v1.WireGuardService.DumpNftables:input_type -> arca.wireguard.v1.DumpNftablesRequest
-	21, // 13: arca.wireguard.v1.WireGuardService.SyncFilesystem:input_type -> arca.wireguard.v1.SyncFilesystemRequest
-	23, // 14: arca.wireguard.v1.WireGuardService.ReadArchive:input_type -> arca.wireguard.v1.ReadArchiveRequest
-	26, // 15: arca.wireguard.v1.WireGuardService.WriteArchive:input_type -> arca.wireguard.v1.WriteArchiveRequest
-	1,  // 16: arca.wireguard.v1.WireGuardService.AddNetwork:output_type -> arca.wireguard.v1.AddNetworkResponse
-	3,  // 17: arca.wireguard.v1.WireGuardService.RemoveNetwork:output_type -> arca.wireguard.v1.RemoveNetworkResponse
-	12, // 18: arca.wireguard.v1.WireGuardService.AddPeer:output_type -> arca.wireguard.v1.AddPeerResponse
-	14, // 19: arca.wireguard.v1.WireGuardService.RemovePeer:output_type -> arca.wireguard.v1.RemovePeerResponse
-	5,  // 20: arca.wireguard.v1.WireGuardService.GetStatus:output_type -> arca.wireguard.v1.GetStatusResponse
-	10, // 21: arca.wireguard.v1.WireGuardService.GetVmnetEndpoint:output_type -> arca.wireguard.v1.GetVmnetEndpointResponse
-	16, // 22: arca.wireguard.v1.WireGuardService.PublishPort:output_type -> arca.wireguard.v1.PublishPortResponse
-	18, // 23: arca.wireguard.v1.WireGuardService.UnpublishPort:output_type -> arca.wireguard.v1.UnpublishPortResponse
-	20, // 24: arca.wireguard.v1.WireGuardService.DumpNftables:output_type -> arca.wireguard.v1.DumpNftablesResponse
-	22, // 25: arca.wireguard.v1.WireGuardService.SyncFilesystem:output_type -> arca.wireguard.v1.SyncFilesystemResponse
-	24, // 26: arca.wireguard.v1.WireGuardService.ReadArchive:output_type -> arca.wireguard.v1.ReadArchiveResponse
-	27, // 27: arca.wireguard.v1.WireGuardService.WriteArchive:output_type -> arca.wireguard.v1.WriteArchiveResponse
-	16, // [16:28] is the sub-list for method output_type
-	4,  // [4:16] is the sub-list for method input_type
-	4,  // [4:4] is the sub-list for extension type_name
-	4,  // [4:4] is the sub-list for extension extendee
-	0,  // [0:4] is the sub-list for field type_name
+	0,  // 3: arca.wireguard.v1.WireGuardService.AddNetwork:input_type -> arca.wireguard.v1.AddNetworkRequest
+	2,  // 4: arca.wireguard.v1.WireGuardService.RemoveNetwork:input_type -> arca.wireguard.v1.RemoveNetworkRequest
+	11, // 5: arca.wireguard.v1.WireGuardService.AddPeer:input_type -> arca.wireguard.v1.AddPeerRequest
+	13, // 6: arca.wireguard.v1.WireGuardService.RemovePeer:input_type -> arca.wireguard.v1.RemovePeerRequest
+	4,  // 7: arca.wireguard.v1.WireGuardService.GetStatus:input_type -> arca.wireguard.v1.GetStatusRequest
+	9,  // 8: arca.wireguard.v1.WireGuardService.GetVmnetEndpoint:input_type -> arca.wireguard.v1.GetVmnetEndpointRequest
+	15, // 9: arca.wireguard.v1.WireGuardService.PublishPort:input_type -> arca.wireguard.v1.PublishPortRequest
+	17, // 10: arca.wireguard.v1.WireGuardService.UnpublishPort:input_type -> arca.wireguard.v1.UnpublishPortRequest
+	19, // 11: arca.wireguard.v1.WireGuardService.DumpNftables:input_type -> arca.wireguard.v1.DumpNftablesRequest
+	1,  // 12: arca.wireguard.v1.WireGuardService.AddNetwork:output_type -> arca.wireguard.v1.AddNetworkResponse
+	3,  // 13: arca.wireguard.v1.WireGuardService.RemoveNetwork:output_type -> arca.wireguard.v1.RemoveNetworkResponse
+	12, // 14: arca.wireguard.v1.WireGuardService.AddPeer:output_type -> arca.wireguard.v1.AddPeerResponse
+	14, // 15: arca.wireguard.v1.WireGuardService.RemovePeer:output_type -> arca.wireguard.v1.RemovePeerResponse
+	5,  // 16: arca.wireguard.v1.WireGuardService.GetStatus:output_type -> arca.wireguard.v1.GetStatusResponse
+	10, // 17: arca.wireguard.v1.WireGuardService.GetVmnetEndpoint:output_type -> arca.wireguard.v1.GetVmnetEndpointResponse
+	16, // 18: arca.wireguard.v1.WireGuardService.PublishPort:output_type -> arca.wireguard.v1.PublishPortResponse
+	18, // 19: arca.wireguard.v1.WireGuardService.UnpublishPort:output_type -> arca.wireguard.v1.UnpublishPortResponse
+	20, // 20: arca.wireguard.v1.WireGuardService.DumpNftables:output_type -> arca.wireguard.v1.DumpNftablesResponse
+	12, // [12:21] is the sub-list for method output_type
+	3,  // [3:12] is the sub-list for method input_type
+	3,  // [3:3] is the sub-list for extension type_name
+	3,  // [3:3] is the sub-list for extension extendee
+	0,  // [0:3] is the sub-list for field type_name
 }
 
-func init() { file_proto_wireguard_proto_init() }
-func file_proto_wireguard_proto_init() {
-	if File_proto_wireguard_proto != nil {
+func init() { file_wireguard_proto_init() }
+func file_wireguard_proto_init() {
+	if File_wireguard_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_wireguard_proto_rawDesc), len(file_proto_wireguard_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wireguard_proto_rawDesc), len(file_wireguard_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   28,
+			NumMessages:   21,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
-		GoTypes:           file_proto_wireguard_proto_goTypes,
-		DependencyIndexes: file_proto_wireguard_proto_depIdxs,
-		MessageInfos:      file_proto_wireguard_proto_msgTypes,
+		GoTypes:           file_wireguard_proto_goTypes,
+		DependencyIndexes: file_wireguard_proto_depIdxs,
+		MessageInfos:      file_wireguard_proto_msgTypes,
 	}.Build()
-	File_proto_wireguard_proto = out.File
-	file_proto_wireguard_proto_goTypes = nil
-	file_proto_wireguard_proto_depIdxs = nil
+	File_wireguard_proto = out.File
+	file_wireguard_proto_goTypes = nil
+	file_wireguard_proto_depIdxs = nil
 }

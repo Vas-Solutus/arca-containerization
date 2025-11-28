@@ -878,7 +878,7 @@ func ConfigureDefaultVmnetSecurity() error {
 	// Create FORWARD security chain for port mapping return traffic
 	// Priority -1 runs BEFORE control plane protection rules (which use priority 0)
 	// This is CRITICAL: return traffic from containers to macOS must be accepted
-	// before the control plane DROP rule (which blocks 172.16.0.0/12 → 192.168.0.0/16)
+	// before the control plane DROP rule (which blocks 172.16.0.0/12 → vmnet subnet)
 	filterPriority := nftables.ChainPriorityFilter
 	forwardSecurityPriority := *filterPriority - 1
 	forwardChain := conn.AddChain(&nftables.Chain{

@@ -79,6 +79,8 @@ func (s *server) AddNetwork(ctx context.Context, req *pb.AddNetworkRequest) (*pb
 		hub, err := wireguard.NewHub(func(gatewayIP string) {
 			// Update DNS server to use vmnet gateway for upstream DNS
 			s.dnsServer.UpdateUpstreamDNS([]string{gatewayIP + ":53"})
+			// Register host.docker.internal -> gateway IP for host access (#24)
+			s.dnsResolver.AddEntry("_host", "host.docker.internal", "", gatewayIP, nil)
 		})
 		if err != nil {
 			s.mu.Unlock()

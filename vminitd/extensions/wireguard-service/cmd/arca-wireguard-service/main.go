@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -20,6 +21,16 @@ import (
 	"github.com/vas-solutus/arca-wireguard-service/internal/dns"
 	"google.golang.org/grpc"
 )
+
+// splitHostEntry splits a "hostname:ip" string into parts
+// Returns [hostname, ip] on success, or a slice with wrong length on failure
+func splitHostEntry(entry string) []string {
+	parts := strings.SplitN(entry, ":", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return []string{}
+	}
+	return parts
+}
 
 const (
 	WIREGUARD_PORT = 51820 // vsock port for WireGuard control API
@@ -98,6 +109,22 @@ func (s *server) AddNetwork(ctx context.Context, req *pb.AddNetworkRequest) (*pb
 			log.Printf("Registered host.docker.internal -> %s", req.HostIp)
 		} else {
 			log.Printf("Warning: No host_ip provided, host.docker.internal will not be available")
+		}
+
+		// Register extra_hosts entries for custom DNS resolution (Issue #34)
+		// Format: "hostname:ip" - the host-gateway value should already be resolved by the daemon
+		if len(req.ExtraHosts) > 0 {
+			for _, entry := range req.ExtraHosts {
+				parts := splitHostEntry(entry)
+				if len(parts) == 2 {
+					hostname := parts[0]
+					ip := parts[1]
+					s.dnsResolver.AddEntry("_extra", hostname, "", ip, nil)
+					log.Printf("Registered extra_host: %s -> %s", hostname, ip)
+				} else {
+					log.Printf("Warning: Invalid extra_host format: %s (expected hostname:ip)", entry)
+				}
+			}
 		}
 	}
 	s.mu.Unlock()

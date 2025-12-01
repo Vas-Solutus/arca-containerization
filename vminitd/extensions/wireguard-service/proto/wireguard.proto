@@ -72,6 +72,11 @@ message AddNetworkRequest {
     // Host IP address for host.docker.internal DNS resolution (e.g., "192.168.2.100")
     // This is the macOS host's LAN IP, allowing containers to reach host services
     string host_ip = 10;
+
+    // Extra host entries for DNS resolution (format: "hostname:ip")
+    // These are added to the container's DNS resolver for custom name resolution
+    // Special value "host-gateway" is resolved to host_ip before being passed here
+    repeated string extra_hosts = 11;
 }
 
 message AddNetworkResponse {

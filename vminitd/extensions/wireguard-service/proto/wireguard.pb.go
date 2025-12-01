@@ -48,7 +48,11 @@ type AddNetworkRequest struct {
 	Gateway string `protobuf:"bytes,9,opt,name=gateway,proto3" json:"gateway,omitempty"`
 	// Host IP address for host.docker.internal DNS resolution (e.g., "192.168.2.100")
 	// This is the macOS host's LAN IP, allowing containers to reach host services
-	HostIp        string `protobuf:"bytes,10,opt,name=host_ip,json=hostIp,proto3" json:"host_ip,omitempty"`
+	HostIp string `protobuf:"bytes,10,opt,name=host_ip,json=hostIp,proto3" json:"host_ip,omitempty"`
+	// Extra host entries for DNS resolution (format: "hostname:ip")
+	// These are added to the container's DNS resolver for custom name resolution
+	// Special value "host-gateway" is resolved to host_ip before being passed here
+	ExtraHosts    []string `protobuf:"bytes,11,rep,name=extra_hosts,json=extraHosts,proto3" json:"extra_hosts,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -151,6 +155,13 @@ func (x *AddNetworkRequest) GetHostIp() string {
 		return x.HostIp
 	}
 	return ""
+}
+
+func (x *AddNetworkRequest) GetExtraHosts() []string {
+	if x != nil {
+		return x.ExtraHosts
+	}
+	return nil
 }
 
 type AddNetworkResponse struct {
@@ -1462,7 +1473,7 @@ var File_wireguard_proto protoreflect.FileDescriptor
 
 const file_wireguard_proto_rawDesc = "" +
 	"\n" +
-	"\x0fwireguard.proto\x12\x11arca.wireguard.v1\"\xdb\x02\n" +
+	"\x0fwireguard.proto\x12\x11arca.wireguard.v1\"\xfc\x02\n" +
 	"\x11AddNetworkRequest\x12\x1d\n" +
 	"\n" +
 	"network_id\x18\x01 \x01(\tR\tnetworkId\x12#\n" +
@@ -1478,7 +1489,9 @@ const file_wireguard_proto_rawDesc = "" +
 	"\fnetwork_cidr\x18\b \x01(\tR\vnetworkCidr\x12\x18\n" +
 	"\agateway\x18\t \x01(\tR\agateway\x12\x17\n" +
 	"\ahost_ip\x18\n" +
-	" \x01(\tR\x06hostIp\"\xd2\x01\n" +
+	" \x01(\tR\x06hostIp\x12\x1f\n" +
+	"\vextra_hosts\x18\v \x03(\tR\n" +
+	"extraHosts\"\xd2\x01\n" +
 	"\x12AddNetworkResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\x12%\n" +

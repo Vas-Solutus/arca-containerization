@@ -30,7 +30,7 @@ extension IntegrationSuite {
         let bs = try await bootstrap(id)
         let container = try LinuxContainer(id, rootfs: bs.rootfs, vmm: bs.vmm) { config in
             config.process.arguments = ["/bin/true"]
-            config.bootlog = bs.bootlog
+            config.bootLog = bs.bootLog
         }
 
         try await container.create()
@@ -50,7 +50,7 @@ extension IntegrationSuite {
         let bs = try await bootstrap(id)
         let container = try LinuxContainer(id, rootfs: bs.rootfs, vmm: bs.vmm) { config in
             config.process.arguments = ["/bin/false"]
-            config.bootlog = bs.bootlog
+            config.bootLog = bs.bootLog
         }
 
         try await container.create()
@@ -61,6 +61,18 @@ extension IntegrationSuite {
 
         guard status.exitCode == 1 else {
             throw IntegrationError.assert(msg: "process status \(status) != 1")
+        }
+    }
+
+    final class DiscardingWriter: @unchecked Sendable, Writer {
+        var count: Int = 0
+
+        func write(_ data: Data) throws {
+            count += data.count
+        }
+
+        func close() throws {
+            return
         }
     }
 
@@ -103,7 +115,7 @@ extension IntegrationSuite {
         let container = try LinuxContainer(id, rootfs: bs.rootfs, vmm: bs.vmm) { config in
             config.process.arguments = ["/bin/echo", "hi"]
             config.process.stdout = buffer
-            config.bootlog = bs.bootlog
+            config.bootLog = bs.bootLog
         }
 
         do {
@@ -133,7 +145,7 @@ extension IntegrationSuite {
         let bs = try await bootstrap(id)
         let container = try LinuxContainer(id, rootfs: bs.rootfs, vmm: bs.vmm) { config in
             config.process.arguments = ["/bin/sleep", "1000"]
-            config.bootlog = bs.bootlog
+            config.bootLog = bs.bootLog
         }
 
         do {
@@ -176,7 +188,7 @@ extension IntegrationSuite {
         let bs = try await bootstrap(id)
         let container = try LinuxContainer(id, rootfs: bs.rootfs, vmm: bs.vmm) { config in
             config.process.arguments = ["/bin/sleep", "1000"]
-            config.bootlog = bs.bootlog
+            config.bootLog = bs.bootLog
         }
 
         do {
@@ -232,11 +244,12 @@ extension IntegrationSuite {
                 try await group.waitForAll()
                 print("all group processes exit")
 
-                // kill the init process.
-                try await container.kill(SIGKILL)
-                try await container.wait()
-                try await container.stop()
             }
+            try await exec.delete()
+
+            try await container.kill(SIGKILL)
+            try await container.wait()
+            try await container.stop()
         }
     }
 
@@ -249,7 +262,7 @@ extension IntegrationSuite {
             config.process.arguments = ["/usr/bin/id"]
             config.process.user = .init(uid: 1, gid: 1, additionalGids: [1])
             config.process.stdout = buffer
-            config.bootlog = bs.bootlog
+            config.bootLog = bs.bootLog
         }
 
         try await container.create()
@@ -274,7 +287,7 @@ extension IntegrationSuite {
             // Try some uid that doesn't exist. This is supported.
             config.process.user = .init(uid: 40000, gid: 40000)
             config.process.stdout = buffer
-            config.bootlog = bs.bootlog
+            config.bootLog = bs.bootLog
         }
 
         try await container.create()
@@ -299,7 +312,7 @@ extension IntegrationSuite {
             // Try some uid that doesn't exist. This is supported.
             config.process.user = .init(username: "40000:40000")
             config.process.stdout = buffer
-            config.bootlog = bs.bootlog
+            config.bootLog = bs.bootLog
         }
 
         try await container.create()
@@ -324,7 +337,7 @@ extension IntegrationSuite {
             // Now for our final trick, try and run a username that doesn't exist.
             config.process.user = .init(username: "thisdoesntexist")
             config.process.stdout = buffer
-            config.bootlog = bs.bootlog
+            config.bootLog = bs.bootLog
         }
 
         try await container.create()
@@ -346,7 +359,7 @@ extension IntegrationSuite {
             config.process.arguments = ["env"]
             config.process.terminal = true
             config.process.stdout = buffer
-            config.bootlog = bs.bootlog
+            config.bootLog = bs.bootLog
         }
 
         try await container.create()
@@ -381,7 +394,7 @@ extension IntegrationSuite {
             config.process.arguments = ["env"]
             config.process.user = .init(uid: 0, gid: 0)
             config.process.stdout = buffer
-            config.bootlog = bs.bootlog
+            config.bootLog = bs.bootLog
         }
 
         try await container.create()
@@ -417,7 +430,7 @@ extension IntegrationSuite {
             config.process.environmentVariables.append(customHomeEnvvar)
             config.process.user = .init(uid: 0, gid: 0)
             config.process.stdout = buffer
-            config.bootlog = bs.bootlog
+            config.bootLog = bs.bootLog
         }
 
         try await container.create()
@@ -448,7 +461,7 @@ extension IntegrationSuite {
             config.process.arguments = ["/bin/hostname"]
             config.hostname = "foo-bar"
             config.process.stdout = buffer
-            config.bootlog = bs.bootlog
+            config.bootLog = bs.bootLog
         }
 
         try await container.create()
@@ -478,7 +491,7 @@ extension IntegrationSuite {
             config.process.arguments = ["cat", "/etc/hosts"]
             config.hosts = Hosts(entries: [entry])
             config.process.stdout = buffer
-            config.bootlog = bs.bootlog
+            config.bootLog = bs.bootLog
         }
 
         try await container.create()
@@ -507,7 +520,7 @@ extension IntegrationSuite {
             config.process.arguments = ["cat"]
             config.process.stdin = StdinBuffer(data: "Hello from test".data(using: .utf8)!)
             config.process.stdout = buffer
-            config.bootlog = bs.bootlog
+            config.bootLog = bs.bootLog
         }
 
         try await container.create()
@@ -537,7 +550,7 @@ extension IntegrationSuite {
             config.process.arguments = ["/bin/cat", "/mnt/hi.txt"]
             config.mounts.append(.share(source: directory.path, destination: "/mnt"))
             config.process.stdout = buffer
-            config.bootlog = bs.bootlog
+            config.bootLog = bs.bootLog
         }
 
         try await container.create()
@@ -558,94 +571,6 @@ extension IntegrationSuite {
         }
     }
 
-    func testPauseResume() async throws {
-        let id = "test-pause-resume"
-
-        let bs = try await bootstrap(id)
-        let container = try LinuxContainer(id, rootfs: bs.rootfs, vmm: bs.vmm) { config in
-            config.process.arguments = ["sleep", "infinity"]
-            config.bootlog = bs.bootlog
-        }
-
-        try await container.create()
-        try await container.start()
-
-        // Very simple test of can we perform actions on the container after pause/resume.
-        try await container.pause()
-        try await Task.sleep(for: .milliseconds(500))
-        try await container.resume()
-
-        try await container.kill(SIGKILL)
-        try await container.wait()
-        try await container.stop()
-    }
-
-    func testPauseResumeWait() async throws {
-        let id = "test-pause-resume-wait"
-
-        let bs = try await bootstrap(id)
-        let container = try LinuxContainer(id, rootfs: bs.rootfs, vmm: bs.vmm) { config in
-            config.process.arguments = ["sleep", "2"]
-            config.bootlog = bs.bootlog
-        }
-
-        try await container.create()
-        try await container.start()
-
-        let t = Task {
-            try await container.wait(timeoutInSeconds: 5)
-        }
-
-        try await Task.sleep(for: .milliseconds(25))
-
-        try await container.pause()
-        try await Task.sleep(for: .milliseconds(500))
-        try await container.resume()
-
-        let status = try await t.value
-
-        guard status.exitCode == 0 else {
-            throw IntegrationError.assert(msg: "process status \(status) != 0")
-        }
-
-        try await container.stop()
-    }
-
-    func testPauseResumeIO() async throws {
-        let id = "test-pause-resume-io"
-
-        let bs = try await bootstrap(id)
-        let buffer = BufferWriter()
-        let container = try LinuxContainer(id, rootfs: bs.rootfs, vmm: bs.vmm) { config in
-            config.process.arguments = ["ping", "-c", "5", "localhost"]
-            config.process.stdout = buffer
-            config.bootlog = bs.bootlog
-        }
-
-        try await container.create()
-        try await container.start()
-
-        try await container.pause()
-        try await Task.sleep(for: .seconds(2))
-        try await container.resume()
-
-        try await container.wait()
-
-        guard let str = String(data: buffer.data, encoding: .utf8) else {
-            throw IntegrationError.assert(msg: "failed to convert stdout to utf8")
-        }
-
-        // Should be 10 lines long. 5 of "filler" and 5 of actual
-        // output, however one of the lines is a blank newline.
-        let expectedLines = 9
-        let lines = str.split(separator: "\n")
-        guard lines.count == expectedLines else {
-            throw IntegrationError.assert(msg: "expected \(expectedLines), got \(lines.count)")
-        }
-
-        try await container.stop()
-    }
-
     func testNestedVirtualizationEnabled() async throws {
         let id = "test-nested-virt"
 
@@ -653,7 +578,7 @@ extension IntegrationSuite {
         let container = try LinuxContainer(id, rootfs: bs.rootfs, vmm: bs.vmm) { config in
             config.process.arguments = ["/bin/true"]
             config.virtualization = true
-            config.bootlog = bs.bootlog
+            config.bootLog = bs.bootLog
         }
 
         do {
@@ -678,10 +603,8 @@ extension IntegrationSuite {
     func testContainerManagerCreate() async throws {
         let id = "test-container-manager"
 
-        // Get the kernel from bootstrap
         let bs = try await bootstrap(id)
 
-        // Create ContainerManager with kernel and initfs reference
         var manager = try ContainerManager(vmm: bs.vmm)
         defer {
             try? manager.delete(id)
@@ -695,14 +618,12 @@ extension IntegrationSuite {
         ) { config in
             config.process.arguments = ["/bin/echo", "ContainerManager test"]
             config.process.stdout = buffer
-            config.bootlog = bs.bootlog
+            config.bootLog = bs.bootLog
         }
 
-        // Start the container
         try await container.create()
         try await container.start()
 
-        // Wait for completion
         let status = try await container.wait()
         try await container.stop()
 
@@ -720,10 +641,8 @@ extension IntegrationSuite {
     func testContainerStopIdempotency() async throws {
         let id = "test-container-stop-idempotency"
 
-        // Get the kernel from bootstrap
         let bs = try await bootstrap(id)
 
-        // Create ContainerManager with kernel and initfs reference
         var manager = try ContainerManager(vmm: bs.vmm)
         defer {
             try? manager.delete(id)
@@ -737,25 +656,22 @@ extension IntegrationSuite {
         ) { config in
             config.process.arguments = ["/bin/echo", "please stop me"]
             config.process.stdout = buffer
-            config.bootlog = bs.bootlog
+            config.bootLog = bs.bootLog
         }
 
-        // Start the container
         try await container.create()
         try await container.start()
 
-        // Wait for completion
         let status = try await container.wait()
         guard status.exitCode == 0 else {
             throw IntegrationError.assert(msg: "process status \(status) != 0")
         }
 
         try await container.stop()
-        // Second go around should return with no problems.
         try await container.stop()
 
         let output = String(data: buffer.data, encoding: .utf8)
-        guard output == "ContainerManager test\n" else {
+        guard output == "please stop me\n" else {
             throw IntegrationError.assert(
                 msg: "process should have returned 'ContainerManager test' != '\(output ?? "nil")'")
         }
@@ -764,10 +680,8 @@ extension IntegrationSuite {
     func testContainerReuse() async throws {
         let id = "test-container-reuse"
 
-        // Get the kernel from bootstrap
         let bs = try await bootstrap(id)
 
-        // Create ContainerManager with kernel and initfs reference
         var manager = try ContainerManager(vmm: bs.vmm)
         defer {
             try? manager.delete(id)
@@ -781,21 +695,18 @@ extension IntegrationSuite {
         ) { config in
             config.process.arguments = ["/bin/echo", "ContainerManager test"]
             config.process.stdout = buffer
-            config.bootlog = bs.bootlog
+            config.bootLog = bs.bootLog
         }
 
-        // Start the container
         try await container.create()
         try await container.start()
 
-        // Wait for completion
         var status = try await container.wait()
         guard status.exitCode == 0 else {
             throw IntegrationError.assert(msg: "process status \(status) != 0")
         }
         try await container.stop()
 
-        // Recreate things.
         try await container.create()
         try await container.start()
 
@@ -838,7 +749,7 @@ extension IntegrationSuite {
             config.process.arguments = ["mount"]
             config.process.terminal = true
             config.process.stdout = buffer
-            config.bootlog = bs.bootlog
+            config.bootLog = bs.bootLog
         }
 
         try await container.create()
@@ -868,7 +779,7 @@ extension IntegrationSuite {
         let bs = try await bootstrap(id)
         let container = try LinuxContainer(id, rootfs: bs.rootfs, vmm: bs.vmm) { config in
             config.process.arguments = ["sleep", "infinity"]
-            config.bootlog = bs.bootlog
+            config.bootLog = bs.bootLog
         }
 
         do {
@@ -914,7 +825,7 @@ extension IntegrationSuite {
             config.process.arguments = ["sleep", "infinity"]
             config.cpus = 2
             config.memoryInBytes = 512.mib()
-            config.bootlog = bs.bootlog
+            config.bootLog = bs.bootLog
         }
 
         do {
@@ -990,6 +901,8 @@ extension IntegrationSuite {
                 throw IntegrationError.assert(msg: "cpu.max '\(cpuLimit)' != expected '\(expectedCpu)'")
             }
 
+            try await sleepExec.delete()
+
             try await container.kill(SIGKILL)
             try await container.wait()
             try await container.stop()
@@ -1018,9 +931,319 @@ extension IntegrationSuite {
         }
     }
 
+    func testUnixSocketIntoGuest() async throws {
+        let id = "test-unixsocket-into-guest"
+
+        let bs = try await bootstrap(id)
+
+        let hostSocketPath = try createHostUnixSocket()
+
+        let buffer = BufferWriter()
+        let container = try LinuxContainer(id, rootfs: bs.rootfs, vmm: bs.vmm) { config in
+            config.process.arguments = ["sleep", "100"]
+            config.sockets = [
+                UnixSocketConfiguration(
+                    source: URL(filePath: hostSocketPath),
+                    destination: URL(filePath: "/tmp/test.sock"),
+                    direction: .into
+                )
+            ]
+            config.bootLog = bs.bootLog
+        }
+
+        do {
+            try await container.create()
+            try await container.start()
+
+            // Execute ls -l to check the socket exists and is indeed a socket
+            let lsExec = try await container.exec("ls-socket") { config in
+                config.arguments = ["ls", "-l", "/tmp/test.sock"]
+                config.stdout = buffer
+            }
+
+            try await lsExec.start()
+            let status = try await lsExec.wait()
+            try await lsExec.delete()
+
+            guard status.exitCode == 0 else {
+                throw IntegrationError.assert(msg: "ls command failed with status \(status)")
+            }
+
+            guard let output = String(data: buffer.data, encoding: .utf8) else {
+                throw IntegrationError.assert(msg: "failed to convert ls output to UTF8")
+            }
+
+            // Socket files in ls -l output start with 's'
+            guard output.hasPrefix("s") else {
+                throw IntegrationError.assert(
+                    msg: "expected socket file (starting with 's'), got: \(output)")
+            }
+
+            try await container.kill(SIGKILL)
+            try await container.wait()
+            try await container.stop()
+        } catch {
+            try? await container.stop()
+            throw error
+        }
+    }
+
+    func testNonClosureConstructor() async throws {
+        let id = "test-container-non-closure-constructor"
+
+        let bs = try await bootstrap(id)
+        let config = LinuxContainer.Configuration(
+            process: LinuxProcessConfiguration(arguments: ["/bin/true"])
+        )
+        let container = LinuxContainer(
+            id,
+            rootfs: bs.rootfs,
+            vmm: bs.vmm,
+            configuration: config
+        )
+
+        try await container.create()
+        try await container.start()
+
+        let status = try await container.wait()
+        try await container.stop()
+
+        guard status.exitCode == 0 else {
+            throw IntegrationError.assert(msg: "process status \(status) != 0")
+        }
+    }
+
+    private func createHostUnixSocket() throws -> String {
+        let dir = FileManager.default.uniqueTemporaryDirectory(create: true)
+        let socketPath = dir.appendingPathComponent("test.sock").path
+
+        let socket = try Socket(type: UnixType(path: socketPath))
+        try socket.listen()
+
+        return socketPath
+    }
+
     private func createMountDirectory() throws -> URL {
         let dir = FileManager.default.uniqueTemporaryDirectory(create: true)
         try "hello".write(to: dir.appendingPathComponent("hi.txt"), atomically: true, encoding: .utf8)
         return dir
+    }
+
+    func testBootLogFileHandle() async throws {
+        let id = "test-bootlog-filehandle"
+
+        let bs = try await bootstrap(id)
+
+        // Create a pipe to capture boot log data
+        let pipe = Pipe()
+        let bootLog = BootLog.fileHandle(pipe.fileHandleForWriting)
+
+        let container = try LinuxContainer(id, rootfs: bs.rootfs, vmm: bs.vmm) { config in
+            config.process.arguments = ["/bin/echo", "test complete"]
+            config.bootLog = bootLog
+        }
+
+        do {
+            try await container.create()
+            try await container.start()
+
+            let status = try await container.wait()
+            try await container.stop()
+
+            guard status.exitCode == 0 else {
+                throw IntegrationError.assert(msg: "process status \(status) != 0")
+            }
+
+            try pipe.fileHandleForWriting.close()
+            let bootLogData = try pipe.fileHandleForReading.readToEnd()
+            guard let bootLogData = bootLogData, bootLogData.count > 0 else {
+                throw IntegrationError.assert(
+                    msg: "expected to receive boot log data from pipe, but got no data")
+            }
+
+            guard let bootLogString = String(data: bootLogData, encoding: .utf8) else {
+                throw IntegrationError.assert(
+                    msg: "failed to convert boot log data to UTF8 string")
+            }
+
+            guard bootLogString.count > 100 else {
+                throw IntegrationError.assert(
+                    msg: "boot log output smaller than expected: got \(bootLogString.count)")
+            }
+        } catch {
+            try? await container.stop()
+            throw error
+        }
+    }
+
+    func testLargeStdioOutput() async throws {
+        let id = "test-large-stdout-stderr-output"
+
+        let bs = try await bootstrap(id)
+        let container = try LinuxContainer(id, rootfs: bs.rootfs, vmm: bs.vmm) { config in
+            config.process.arguments = ["/bin/sleep", "1000"]
+            config.bootLog = bs.bootLog
+        }
+
+        do {
+            try await container.create()
+            try await container.start()
+
+            let stdoutBuffer = DiscardingWriter()
+            let stderrBuffer = DiscardingWriter()
+
+            let exec = try await container.exec("large-output") { config in
+                config.arguments = [
+                    "sh",
+                    "-c",
+                    """
+                    dd if=/dev/zero bs=1M count=250 status=none && \
+                    dd if=/dev/zero bs=1M count=250 status=none >&2
+                    """,
+                ]
+                config.stdout = stdoutBuffer
+                config.stderr = stderrBuffer
+            }
+
+            let started = CFAbsoluteTimeGetCurrent()
+
+            try await exec.start()
+            let status = try await exec.wait()
+
+            let lasted = CFAbsoluteTimeGetCurrent() - started
+            print("Test \(id) finished process ingesting stdio in \(lasted)")
+
+            guard status.exitCode == 0 else {
+                throw IntegrationError.assert(msg: "exec process status \(status) != 0")
+            }
+
+            try await exec.delete()
+
+            let expectedSize = 250 * 1024 * 1024
+            guard stdoutBuffer.count == expectedSize else {
+                throw IntegrationError.assert(
+                    msg: "stdout size \(stdoutBuffer.count) != expected \(expectedSize)")
+            }
+
+            guard stderrBuffer.count == expectedSize else {
+                throw IntegrationError.assert(
+                    msg: "stderr size \(stderrBuffer.count) != expected \(expectedSize)")
+            }
+
+            try await container.kill(SIGKILL)
+            try await container.wait()
+            try await container.stop()
+        } catch {
+            try? await container.stop()
+            throw error
+        }
+    }
+
+    func testProcessDeleteIdempotency() async throws {
+        let id = "test-process-delete-idempotency"
+
+        let bs = try await bootstrap(id)
+        let container = try LinuxContainer(id, rootfs: bs.rootfs, vmm: bs.vmm) { config in
+            config.process.arguments = ["/bin/sleep", "1000"]
+            config.bootLog = bs.bootLog
+        }
+
+        do {
+            try await container.create()
+            try await container.start()
+
+            // Create an exec process
+            let exec = try await container.exec("test-exec") { config in
+                config.arguments = ["/bin/true"]
+            }
+
+            try await exec.start()
+            let status = try await exec.wait()
+
+            guard status.exitCode == 0 else {
+                throw IntegrationError.assert(msg: "exec process status \(status) != 0")
+            }
+
+            // Call delete twice to verify idempotency
+            try await exec.delete()
+            try await exec.delete()  // Should be a no-op
+
+            try await container.kill(SIGKILL)
+            try await container.wait()
+            try await container.stop()
+        } catch {
+            try? await container.stop()
+            throw error
+        }
+    }
+
+    func testMultipleExecsWithoutDelete() async throws {
+        let id = "test-multiple-execs-without-delete"
+
+        let bs = try await bootstrap(id)
+        let container = try LinuxContainer(id, rootfs: bs.rootfs, vmm: bs.vmm) { config in
+            config.process.arguments = ["/bin/sleep", "1000"]
+            config.bootLog = bs.bootLog
+        }
+
+        do {
+            try await container.create()
+            try await container.start()
+
+            // Create 3 exec processes without deleting them
+            let exec1 = try await container.exec("exec-1") { config in
+                config.arguments = ["/bin/true"]
+            }
+            try await exec1.start()
+            let status1 = try await exec1.wait()
+            guard status1.exitCode == 0 else {
+                throw IntegrationError.assert(msg: "exec1 process status \(status1) != 0")
+            }
+
+            let exec2 = try await container.exec("exec-2") { config in
+                config.arguments = ["/bin/true"]
+            }
+            try await exec2.start()
+            let status2 = try await exec2.wait()
+            guard status2.exitCode == 0 else {
+                throw IntegrationError.assert(msg: "exec2 process status \(status2) != 0")
+            }
+
+            let exec3 = try await container.exec("exec-3") { config in
+                config.arguments = ["/bin/true"]
+            }
+            try await exec3.start()
+            let status3 = try await exec3.wait()
+            guard status3.exitCode == 0 else {
+                throw IntegrationError.assert(msg: "exec3 process status \(status3) != 0")
+            }
+
+            // Stop should handle cleanup of all exec processes gracefully
+            try await container.kill(SIGKILL)
+            try await container.wait()
+            try await container.stop()
+        } catch {
+            try? await container.stop()
+            throw error
+        }
+    }
+
+    func testNonExistentBinary() async throws {
+        let id = "test-non-existent-binary"
+
+        let bs = try await bootstrap(id)
+        let container = try LinuxContainer(id, rootfs: bs.rootfs, vmm: bs.vmm) { config in
+            config.process.arguments = ["foo-bar-baz"]
+            config.bootLog = bs.bootLog
+        }
+
+        try await container.create()
+        do {
+            try await container.start()
+        } catch {
+            return
+        }
+        try await container.stop()
+        throw IntegrationError.assert(msg: "container start should have failed")
     }
 }

@@ -19,6 +19,7 @@ import ContainerizationOCI
 import ContainerizationOS
 import Foundation
 import GRPC
+import NIOCore
 import NIOPosix
 
 /// A remote connection into the vminitd Linux guest agent via a port (vsock).
@@ -35,7 +36,7 @@ public struct Vminitd: Sendable {
         self.client = client
     }
 
-    public init(connection: FileHandle, group: MultiThreadedEventLoopGroup) {
+    public init(connection: FileHandle, group: EventLoopGroup) {
         self.client = .init(connection: connection, group: group)
     }
 
@@ -53,24 +54,14 @@ extension Vminitd: VirtualMachineAgent {
 
         try await setenv(key: "PATH", value: LinuxProcessConfiguration.defaultPath)
 
+        // Vminitd mounts /proc, /sys, /sys/fs/cgroup and /run automatically.
         let mounts: [ContainerizationOCI.Mount] = [
-            .init(type: "sysfs", source: "sysfs", destination: "/sys"),
             .init(type: "tmpfs", source: "tmpfs", destination: "/tmp"),
             .init(type: "devpts", source: "devpts", destination: "/dev/pts", options: ["gid=5", "mode=620", "ptmxmode=666"]),
-            .init(type: "cgroup2", source: "none", destination: "/sys/fs/cgroup"),
         ]
         for mount in mounts {
             try await self.mount(mount)
         }
-
-        // Setup root cg subtree_control.
-        let data = "+memory +pids +io +cpu +cpuset +hugetlb".data(using: .utf8)!
-        try await writeFile(
-            path: "/sys/fs/cgroup/cgroup.subtree_control",
-            data: data,
-            flags: .init(),
-            mode: 0
-        )
     }
 
     public func writeFile(path: String, data: Data, flags: WriteFileFlags, mode: UInt32) async throws {
@@ -184,6 +175,7 @@ extension Vminitd: VirtualMachineAgent {
         stdinPort: UInt32?,
         stdoutPort: UInt32?,
         stderrPort: UInt32?,
+        ociRuntimePath: String?,
         configuration: ContainerizationOCI.Spec,
         options: Data?
     ) async throws {
@@ -202,6 +194,9 @@ extension Vminitd: VirtualMachineAgent {
                 }
                 if let containerID {
                     $0.containerID = containerID
+                }
+                if let ociRuntimePath {
+                    $0.ociRuntimePath = ociRuntimePath
                 }
                 $0.configuration = try enc.encode(configuration)
             })
@@ -413,19 +408,6 @@ extension Vminitd {
             })
         return response.result
     }
-
-    /// Syncing shutdown will send a SIGTERM to all processes
-    /// and wait, perform a sync operation, then issue a SIGKILL
-    /// to the remaining processes before syncing again.
-    public func syncingShutdown() async throws {
-        _ = try await self.kill(pid: -1, signal: SIGTERM)
-        try await Task.sleep(for: .milliseconds(10))
-        try await self.sync()
-
-        _ = try await self.kill(pid: -1, signal: SIGKILL)
-        try await Task.sleep(for: .milliseconds(10))
-        try await self.sync()
-    }
 }
 
 extension Hosts {
@@ -450,25 +432,13 @@ extension Hosts {
 }
 
 extension Vminitd.Client {
-    public init(socket: String, group: MultiThreadedEventLoopGroup) {
-        var config = ClientConnection.Configuration.default(
-            target: .unixDomainSocket(socket),
-            eventLoopGroup: group
-        )
-        config.maximumReceiveMessageLength = Int(64.mib())
-        config.connectionBackoff = ConnectionBackoff(retries: .upTo(5))
-
-        self = .init(channel: ClientConnection(configuration: config))
-    }
-
-    public init(connection: FileHandle, group: MultiThreadedEventLoopGroup) {
+    public init(connection: FileHandle, group: EventLoopGroup) {
         var config = ClientConnection.Configuration.default(
             target: .connectedSocket(connection.fileDescriptor),
             eventLoopGroup: group
         )
+        config.connectionBackoff = nil
         config.maximumReceiveMessageLength = Int(64.mib())
-        config.connectionBackoff = ConnectionBackoff(retries: .upTo(5))
-
         self = .init(channel: ClientConnection(configuration: config))
     }
 

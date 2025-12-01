@@ -477,6 +477,7 @@ extension Initd: Com_Apple_Containerization_Sandbox_V3_SandboxContextAsyncProvid
                 "stdin": "Port: \(request.stdin)",
                 "stdout": "Port: \(request.stdout)",
                 "stderr": "Port: \(request.stderr)",
+                "configuration": "\(request.configuration.count)",
             ])
 
         if !request.hasContainerID {
@@ -541,10 +542,11 @@ extension Initd: Com_Apple_Containerization_Sandbox_V3_SandboxContextAsyncProvid
                 // after network configuration completes. Until then, the vmnet resolv.conf
                 // (pointing to control plane DNS) remains in place for internet DNS resolution.
 
-                let ctr = try ManagedContainer(
+                let ctr = try await ManagedContainer(
                     id: request.id,
                     stdio: stdioPorts,
                     spec: ociSpec,
+                    ociRuntimePath: request.hasOciRuntimePath ? request.ociRuntimePath : nil,
                     log: self.log
                 )
                 try await self.state.add(container: ctr)
@@ -562,7 +564,7 @@ extension Initd: Com_Apple_Containerization_Sandbox_V3_SandboxContextAsyncProvid
             if error is GRPCStatus {
                 throw error
             }
-            throw GRPCStatus(code: .internalError, message: "create managed process: \(error)")
+            throw GRPCStatus(code: .internalError, message: "createProcess: \(error)")
         }
     }
 
@@ -608,18 +610,32 @@ extension Initd: Com_Apple_Containerization_Sandbox_V3_SandboxContextAsyncProvid
             )
         }
 
-        let ctr = try await self.state.get(container: request.containerID)
+        do {
+            let ctr = try await self.state.get(container: request.containerID)
 
-        // Are we trying to delete the container itself?
-        if request.id == request.containerID {
-            try await ctr.delete()
-            try await state.remove(container: request.id)
-        } else {
-            // Or just a single exec.
-            try await ctr.deleteExec(id: request.id)
+            // Are we trying to delete the container itself?
+            if request.id == request.containerID {
+                try await ctr.delete()
+                try await state.remove(container: request.id)
+            } else {
+                // Or just a single exec.
+                try await ctr.deleteExec(id: request.id)
+            }
+
+            return .init()
+        } catch {
+            log.error(
+                "deleteProcess",
+                metadata: [
+                    "id": "\(request.id)",
+                    "containerID": "\(request.containerID)",
+                    "error": "\(error)",
+                ])
+            throw GRPCStatus(
+                code: .internalError,
+                message: "deleteProcess: \(error)"
+            )
         }
-
-        return .init()
     }
 
     func startProcess(
@@ -724,7 +740,7 @@ extension Initd: Com_Apple_Containerization_Sandbox_V3_SandboxContextAsyncProvid
             let exitStatus = try await ctr.wait(execID: request.id)
 
             return .with {
-                $0.exitCode = exitStatus.exitStatus
+                $0.exitCode = exitStatus.exitCode
                 $0.exitedAt = Google_Protobuf_Timestamp(date: exitStatus.exitedAt)
             }
         } catch {
@@ -784,7 +800,7 @@ extension Initd: Com_Apple_Containerization_Sandbox_V3_SandboxContextAsyncProvid
         request: Com_Apple_Containerization_Sandbox_V3_IpLinkSetRequest, context: GRPC.GRPCAsyncServerCallContext
     ) async throws -> Com_Apple_Containerization_Sandbox_V3_IpLinkSetResponse {
         log.debug(
-            "ip-link-set",
+            "ipLinkSet",
             metadata: [
                 "interface": "\(request.interface)",
                 "up": "\(request.up)",
@@ -797,7 +813,7 @@ extension Initd: Com_Apple_Containerization_Sandbox_V3_SandboxContextAsyncProvid
             try session.linkSet(interface: request.interface, up: request.up, mtu: mtuValue)
         } catch {
             log.error(
-                "ip-link-set",
+                "ipLinkSet",
                 metadata: [
                     "error": "\(error)"
                 ])
@@ -811,10 +827,10 @@ extension Initd: Com_Apple_Containerization_Sandbox_V3_SandboxContextAsyncProvid
         request: Com_Apple_Containerization_Sandbox_V3_IpAddrAddRequest, context: GRPC.GRPCAsyncServerCallContext
     ) async throws -> Com_Apple_Containerization_Sandbox_V3_IpAddrAddResponse {
         log.debug(
-            "ip-addr-add",
+            "ipAddrAdd",
             metadata: [
                 "interface": "\(request.interface)",
-                "addr": "\(request.address)",
+                "address": "\(request.address)",
             ])
 
         do {
@@ -823,7 +839,7 @@ extension Initd: Com_Apple_Containerization_Sandbox_V3_SandboxContextAsyncProvid
             try session.addressAdd(interface: request.interface, address: request.address)
         } catch {
             log.error(
-                "ip-addr-add",
+                "ipAddrAdd",
                 metadata: [
                     "error": "\(error)"
                 ])
@@ -837,7 +853,7 @@ extension Initd: Com_Apple_Containerization_Sandbox_V3_SandboxContextAsyncProvid
         request: Com_Apple_Containerization_Sandbox_V3_IpRouteAddLinkRequest, context: GRPC.GRPCAsyncServerCallContext
     ) async throws -> Com_Apple_Containerization_Sandbox_V3_IpRouteAddLinkResponse {
         log.debug(
-            "ip-route-add-link",
+            "ipRouteAddLink",
             metadata: [
                 "interface": "\(request.interface)",
                 "address": "\(request.address)",
@@ -854,7 +870,7 @@ extension Initd: Com_Apple_Containerization_Sandbox_V3_SandboxContextAsyncProvid
             )
         } catch {
             log.error(
-                "ip-route-add-link",
+                "ipRouteAddLink",
                 metadata: [
                     "error": "\(error)"
                 ])
@@ -869,7 +885,7 @@ extension Initd: Com_Apple_Containerization_Sandbox_V3_SandboxContextAsyncProvid
         context: GRPC.GRPCAsyncServerCallContext
     ) async throws -> Com_Apple_Containerization_Sandbox_V3_IpRouteAddDefaultResponse {
         log.debug(
-            "ip-route-add-default",
+            "ipRouteAddDefault",
             metadata: [
                 "interface": "\(request.interface)",
                 "gateway": "\(request.gateway)",
@@ -881,7 +897,7 @@ extension Initd: Com_Apple_Containerization_Sandbox_V3_SandboxContextAsyncProvid
             try session.routeAddDefault(interface: request.interface, gateway: request.gateway)
         } catch {
             log.error(
-                "ip-route-add-default",
+                "ipRouteAddDefault",
                 metadata: [
                     "error": "\(error)"
                 ])
@@ -897,11 +913,13 @@ extension Initd: Com_Apple_Containerization_Sandbox_V3_SandboxContextAsyncProvid
     ) async throws -> Com_Apple_Containerization_Sandbox_V3_ConfigureDnsResponse {
         let domain = request.hasDomain ? request.domain : nil
         log.debug(
-            "configure-dns",
+            "configureDns",
             metadata: [
                 "location": "\(request.location)",
                 "nameservers": "\(request.nameservers)",
                 "domain": "\(domain ?? "")",
+                "searchDomains": "\(request.searchDomains)",
+                "options": "\(request.options)",
             ])
 
         do {
@@ -943,7 +961,7 @@ extension Initd: Com_Apple_Containerization_Sandbox_V3_SandboxContextAsyncProvid
             log.debug("wrote resolver configuration", metadata: ["path": "\(resolvConf.path)"])
         } catch {
             log.error(
-                "configure-dns",
+                "configureDns",
                 metadata: [
                     "error": "\(error)"
                 ])
@@ -1213,6 +1231,10 @@ extension Initd {
         var seenSuppGids = Set<UInt32>()
         process.user.additionalGids = process.user.additionalGids.filter {
             seenSuppGids.insert($0).inserted
+        }
+
+        if !process.env.contains(where: { $0.hasPrefix("PATH=") }) {
+            process.env.append("PATH=\(LinuxProcessConfiguration.defaultPath)")
         }
 
         if !process.env.contains(where: { $0.hasPrefix("HOME=") }) {

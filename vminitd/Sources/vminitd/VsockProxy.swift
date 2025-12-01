@@ -30,6 +30,16 @@ actor VsockProxy {
         case vsock
     }
 
+    public let id: String
+    private let path: URL
+    private let action: Action
+    private let port: UInt32
+    private let udsPerms: UInt32?
+    private let log: Logger?
+
+    private var listener: Socket?
+    private var task: Task<(), Never>?
+
     init(
         id: String,
         action: Action,
@@ -45,16 +55,6 @@ actor VsockProxy {
         self.udsPerms = udsPerms
         self.log = log
     }
-
-    public let id: String
-    private let path: URL
-    private let action: Action
-    private let port: UInt32
-    private let udsPerms: UInt32?
-    private let log: Logger?
-
-    private var listener: Socket?
-    private var task: Task<(), Never>?
 }
 
 extension VsockProxy {
@@ -113,6 +113,8 @@ extension VsockProxy {
             perms: self.udsPerms,
             unlinkExisting: true
         )
+        let oldMask = umask(0)
+        defer { umask(oldMask) }
         let uds = try Socket(type: type)
         try uds.listen()
         listener = uds
@@ -266,7 +268,7 @@ extension VsockProxy {
                         // and no more EPOLLOUT events on the server fd
                         eofFromClient = true
                         if shutdown(serverFile.fileDescriptor, SHUT_WR) != 0 {
-                            self.log?.info(
+                            self.log?.warning(
                                 "failed to shut down client reads",
                                 metadata: [
                                     "vport": "\(self.port)",
@@ -318,7 +320,7 @@ extension VsockProxy {
                         // and no more EPOLLOUT events on the client fd
                         eofFromServer = true
                         if shutdown(clientFile.fileDescriptor, SHUT_WR) != 0 {
-                            self.log?.info(
+                            self.log?.warning(
                                 "failed to shut down server reads",
                                 metadata: [
                                     "vport": "\(self.port)",
@@ -351,7 +353,7 @@ extension VsockProxy {
     ) -> (Bool, Bool) {
         do {
             let (readBytes, writeBytes, action) = try OSFile.splice(from: &fromFile, to: &toFile)
-            log?.debug(
+            log?.trace(
                 "transferred data",
                 metadata: [
                     "description": "\(description)",
@@ -367,7 +369,7 @@ extension VsockProxy {
                 // we should see no more EPOLLIN events on the client fd
                 // and no more EPOLLOUT events on the server fd
                 if shutdown(toFile.fileDescriptor, SHUT_WR) != 0 {
-                    log?.info(
+                    log?.warning(
                         "failed to shut down reads",
                         metadata: [
                             "description": "\(description)",

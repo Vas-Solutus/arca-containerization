@@ -42,6 +42,7 @@ public protocol VirtualMachineAgent: Sendable {
     func mkdir(path: String, all: Bool, perms: UInt32) async throws
     @discardableResult
     func kill(pid: Int32, signal: Int32) async throws -> Int32
+    func sync() async throws
     func writeFile(path: String, data: Data, flags: WriteFileFlags, mode: UInt32) async throws
 
     // Process lifecycle
@@ -51,6 +52,7 @@ public protocol VirtualMachineAgent: Sendable {
         stdinPort: UInt32?,
         stdoutPort: UInt32?,
         stderrPort: UInt32?,
+        ociRuntimePath: String?,
         configuration: ContainerizationOCI.Spec,
         options: Data?
     ) async throws
@@ -88,5 +90,9 @@ extension VirtualMachineAgent {
 
     public func containerStatistics(containerIDs: [String]) async throws -> [ContainerStatistics] {
         throw ContainerizationError(.unsupported, message: "containerStatistics")
+    }
+
+    public func sync() async throws {
+        throw ContainerizationError(.unsupported, message: "sync")
     }
 }

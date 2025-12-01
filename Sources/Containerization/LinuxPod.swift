@@ -49,7 +49,7 @@ public final class LinuxPod: Sendable {
         /// Whether nested virtualization should be turned on for the pod.
         public var virtualization: Bool = false
         /// Optional file path to store serial boot logs.
-        public var bootlog: URL?
+        public var bootLog: BootLog?
 
         public init() {}
     }
@@ -293,7 +293,7 @@ extension LinuxPod {
                 memoryInBytes: self.config.memoryInBytes,
                 interfaces: self.config.interfaces,
                 mountsByID: mountsByID,
-                bootlog: self.config.bootlog,
+                bootLog: self.config.bootLog,
                 nestedVirtualization: self.config.virtualization
             )
             let creationConfig = StandardVMConfig(configuration: vmConfig)
@@ -406,6 +406,7 @@ extension LinuxPod {
                     containerID: containerID,
                     spec: spec,
                     io: stdio,
+                    ociRuntimePath: nil,
                     agent: agent,
                     vm: createdState.vm,
                     logger: self.logger
@@ -532,22 +533,6 @@ extension LinuxPod {
         }
     }
 
-    /// Pause the pod's VM.
-    public func pause() async throws {
-        try await self.state.withLock { state in
-            let createdState = try state.phase.createdState("pause")
-            try await createdState.vm.pause()
-        }
-    }
-
-    /// Resume the pod's VM.
-    public func resume() async throws {
-        try await self.state.withLock { state in
-            let createdState = try state.phase.createdState("resume")
-            try await createdState.vm.resume()
-        }
-    }
-
     /// Send a signal to a container.
     public func killContainer(_ containerID: String, signal: Int32) async throws {
         try await self.state.withLock { state in
@@ -629,6 +614,7 @@ extension LinuxPod {
                 containerID: containerID,
                 spec: spec,
                 io: stdio,
+                ociRuntimePath: nil,
                 agent: agent,
                 vm: createdState.vm,
                 logger: self.logger
@@ -721,13 +707,15 @@ extension LinuxPod {
         // Adjust paths to be relative to the container's rootfs
         let rootInGuest = URL(filePath: Self.guestRootfsPath(containerID))
 
+        let port: UInt32
         if socket.direction == .into {
+            port = self.hostVsockPorts.wrappingAdd(1, ordering: .relaxed).oldValue
             socket.destination = rootInGuest.appending(path: socket.destination.path)
         } else {
+            port = self.guestVsockPorts.wrappingAdd(1, ordering: .relaxed).oldValue
             socket.source = rootInGuest.appending(path: socket.source.path)
         }
 
-        let port = self.hostVsockPorts.wrappingAdd(1, ordering: .relaxed).oldValue
         try await relayManager.start(port: port, socket: socket)
         try await relayAgent.relaySocket(port: port, configuration: socket)
     }

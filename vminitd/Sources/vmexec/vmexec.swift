@@ -80,7 +80,7 @@ extension App {
         // lookup executable
         let path = Path.findPath(currentEnv) ?? Path.getCurrentPath()
         guard let resolvedExecutable = Path.lookPath(process.args[0], path: path) else {
-            throw App.Failure(message: "Failed to find target executable \(process.args[0])")
+            throw App.Failure(message: "failed to find target executable \(process.args[0])")
         }
 
         let executable = strdup(resolvedExecutable.path())
@@ -181,5 +181,21 @@ extension App {
             .internalError,
             message: message
         )
+    }
+
+    static func writeError(_ error: Error) {
+        let errorPipe = FileHandle(fileDescriptor: 5)
+
+        let errorMessage: String
+        if let czError = error as? ContainerizationError {
+            errorMessage = czError.description
+        } else {
+            errorMessage = String(describing: error)
+        }
+
+        if let data = errorMessage.data(using: .utf8) {
+            try? errorPipe.write(contentsOf: data)
+        }
+        try? errorPipe.close()
     }
 }

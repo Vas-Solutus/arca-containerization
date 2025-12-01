@@ -88,6 +88,7 @@ package final class SocketRelay: Sendable {
     private struct State {
         var relaySources: [String: ConnectionSources] = [:]
         var t: Task<(), Never>? = nil
+        var listener: VsockListener? = nil
     }
 
     // `DispatchSourceRead` is thread-safe.
@@ -137,15 +138,15 @@ extension SocketRelay {
             t.cancel()
             $0.t = nil
             $0.relaySources.removeAll()
-        }
 
-        switch configuration.direction {
-        case .outOf:
-            // If we created the host conn, lets unlink it also. It's possible it was
-            // already unlinked if the relay failed earlier.
-            try? FileManager.default.removeItem(at: self.configuration.destination)
-        case .into:
-            try self.vm.stopListen(self.port)
+            switch configuration.direction {
+            case .outOf:
+                // If we created the host conn, lets unlink it also. It's possible it was
+                // already unlinked if the relay failed earlier.
+                try? FileManager.default.removeItem(at: self.configuration.destination)
+            case .into:
+                try $0.listener?.finish()
+            }
         }
     }
 
@@ -190,18 +191,20 @@ extension SocketRelay {
         let port = self.port
         let log = self.log
 
-        let connectionStream = try self.vm.listen(self.port)
+        let listener = try self.vm.listen(self.port)
         log?.info(
             "listening on guest vsock",
             metadata: [
                 "path": "\(hostPath)",
                 "vport": "\(port)",
             ])
+
         self.state.withLock {
+            $0.listener = listener
             $0.t = Task {
                 do {
-                    defer { connectionStream.finish() }
-                    for await connection in connectionStream.connections {
+                    defer { try? listener.finish() }
+                    for await connection in listener {
                         try await self.handleGuestVsockConn(
                             vsockConn: connection,
                             hostConnectionPath: hostPath,
@@ -254,7 +257,7 @@ extension SocketRelay {
             closeOnDeinit: false
         )
         log?.info(
-            "initiating connection from host to guest",
+            "initiating connection from guest to host",
             metadata: [
                 "vport": "\(port)",
                 "hostFd": "\(hostSocket.fileDescriptor)",
@@ -322,7 +325,7 @@ extension SocketRelay {
         }
 
         connSource.setCancelHandler {
-            self.log?.info(
+            self.log?.debug(
                 "host cancel received",
                 metadata: [
                     "hostFd": "\(hostConn.fileDescriptor)",
@@ -334,6 +337,12 @@ extension SocketRelay {
             self.state.withLock { _ in
                 connSource.cancel()
                 if vsockConnectionSource.isCancelled {
+                    self.log?.info(
+                        "close file descriptors",
+                        metadata: [
+                            "hostFd": "\(hostConn.fileDescriptor)",
+                            "guestFd": "\(guestFd)",
+                        ])
                     try? hostConn.close()
                     close(guestFd)
                 }
@@ -341,7 +350,7 @@ extension SocketRelay {
         }
 
         vsockConnectionSource.setCancelHandler {
-            self.log?.info(
+            self.log?.debug(
                 "guest cancel received",
                 metadata: [
                     "hostFd": "\(hostConn.fileDescriptor)",
@@ -377,22 +386,22 @@ extension SocketRelay {
         log: Logger? = nil
     ) {
         if source.data == 0 {
-            log?.info(
+            log?.debug(
                 "source EOF",
                 metadata: [
                     "sourceFd": "\(sourceFd)",
                     "dstFd": "\(destinationFd)",
                 ])
             if !source.isCancelled {
-                log?.info(
+                log?.debug(
                     "canceling DispatchSourceRead",
                     metadata: [
                         "sourceFd": "\(sourceFd)",
                         "dstFd": "\(destinationFd)",
                     ])
                 source.cancel()
-                if shutdown(destinationFd, SHUT_WR) != 0 {
-                    log?.info(
+                if shutdown(destinationFd, Int32(SHUT_WR)) != 0 {
+                    log?.warning(
                         "failed to shut down reads",
                         metadata: [
                             "errno": "\(errno)",
@@ -406,7 +415,7 @@ extension SocketRelay {
         }
 
         do {
-            log?.debug(
+            log?.trace(
                 "source copy",
                 metadata: [
                     "sourceFd": "\(sourceFd)",
@@ -423,9 +432,9 @@ extension SocketRelay {
             log?.error("file descriptor copy failed \(error)")
             if !source.isCancelled {
                 source.cancel()
-                if shutdown(destinationFd, SHUT_RDWR) != 0 {
-                    log?.info(
-                        "failed to shut down destination",
+                if shutdown(destinationFd, Int32(SHUT_RDWR)) != 0 {
+                    log?.warning(
+                        "failed to shut down destination after I/O error",
                         metadata: [
                             "errno": "\(errno)",
                             "sourceFd": "\(sourceFd)",

@@ -77,6 +77,7 @@ public final class LinuxProcess: Sendable {
         var stdio: StdioHandles
         var stdinRelay: Task<(), Never>?
         var ioTracker: IoTracker?
+        var deletionTask: Task<Void, Error>?
 
         struct IoTracker {
             let stream: AsyncStream<Void>
@@ -95,43 +96,50 @@ public final class LinuxProcess: Sendable {
     private let ioSetup: Stdio
     private let agent: any VirtualMachineAgent
     private let vm: any VirtualMachineInstance
+    private let ociRuntimePath: String?
     private let logger: Logger?
+    private let onDelete: (@Sendable () async -> Void)?
 
     init(
         _ id: String,
         containerID: String? = nil,
         spec: Spec,
         io: Stdio,
+        ociRuntimePath: String?,
         agent: any VirtualMachineAgent,
         vm: any VirtualMachineInstance,
-        logger: Logger?
+        logger: Logger?,
+        onDelete: (@Sendable () async -> Void)? = nil
     ) {
         self.id = id
         self.owningContainer = containerID
         self.state = Mutex<State>(.init(spec: spec, pid: -1, stdio: StdioHandles()))
         self.ioSetup = io
         self.agent = agent
+        self.ociRuntimePath = ociRuntimePath
         self.vm = vm
         self.logger = logger
+        self.onDelete = onDelete
     }
 }
 
 extension LinuxProcess {
-    func setupIO(streams: [VsockConnectionStream?]) async throws -> [FileHandle?] {
+    func setupIO(listeners: [VsockListener?]) async throws -> [FileHandle?] {
         let handles = try await Timeout.run(seconds: 3) {
-            await withTaskGroup(of: (Int, FileHandle?).self) { group in
+            try await withThrowingTaskGroup(of: (Int, FileHandle?).self) { group in
                 var results = [FileHandle?](repeating: nil, count: 3)
 
-                for (index, stream) in streams.enumerated() {
-                    guard let stream = stream else { continue }
+                for (index, listener) in listeners.enumerated() {
+                    guard let listener else { continue }
 
                     group.addTask {
-                        let first = await stream.connections.first(where: { _ in true })
+                        let first = await listener.first(where: { _ in true })
+                        try listener.finish()
                         return (index, first)
                     }
                 }
 
-                for await (index, fileHandle) in group {
+                for try await (index, fileHandle) in group {
                     results[index] = fileHandle
                 }
                 return results
@@ -227,12 +235,12 @@ extension LinuxProcess {
     public func start() async throws {
         do {
             let spec = self.state.withLock { $0.spec }
-            var streams = [VsockConnectionStream?](repeating: nil, count: 3)
+            var listeners = [VsockListener?](repeating: nil, count: 3)
             if let stdin = self.ioSetup.stdin {
-                streams[0] = try self.vm.listen(stdin.port)
+                listeners[0] = try self.vm.listen(stdin.port)
             }
             if let stdout = self.ioSetup.stdout {
-                streams[1] = try self.vm.listen(stdout.port)
+                listeners[1] = try self.vm.listen(stdout.port)
             }
             if let stderr = self.ioSetup.stderr {
                 if spec.process!.terminal {
@@ -241,11 +249,11 @@ extension LinuxProcess {
                         message: "stderr should not be configured with terminal=true"
                     )
                 }
-                streams[2] = try self.vm.listen(stderr.port)
+                listeners[2] = try self.vm.listen(stderr.port)
             }
 
             let t = Task {
-                try await self.setupIO(streams: streams)
+                try await self.setupIO(listeners: listeners)
             }
 
             try await agent.createProcess(
@@ -254,6 +262,7 @@ extension LinuxProcess {
                 stdinPort: self.ioSetup.stdin?.port,
                 stdoutPort: self.ioSetup.stdout?.port,
                 stderrPort: self.ioSetup.stderr?.port,
+                ociRuntimePath: self.ociRuntimePath,
                 configuration: spec,
                 options: nil
             )
@@ -391,18 +400,44 @@ extension LinuxProcess {
 
     /// Cleans up guest state and waits on and closes any host resources (stdio handles).
     public func delete() async throws {
+        try await self._delete()
+        await self.onDelete?()
+    }
+
+    func _delete() async throws {
+        let task = self.state.withLock { state in
+            if let existingTask = state.deletionTask {
+                // Deletion already in progress or finished.
+                return existingTask
+            }
+
+            let task = Task<Void, Error> {
+                try await self.performDeletion()
+            }
+            state.deletionTask = task
+            return task
+        }
+
+        try await task.value
+    }
+
+    private func performDeletion() async throws {
         do {
             try await self.agent.deleteProcess(
                 id: self.id,
                 containerID: self.owningContainer
             )
         } catch {
-            self.logger?.error(
-                "process deletion",
-                metadata: [
-                    "id": "\(self.id)",
-                    "error": "\(error)",
-                ])
+            self.state.withLock {
+                $0.stdinRelay?.cancel()
+                try? $0.stdio.close()
+            }
+            try? await self.agent.close()
+            throw ContainerizationError(
+                .internalError,
+                message: "failed to delete process",
+                cause: error,
+            )
         }
 
         do {
@@ -411,12 +446,12 @@ extension LinuxProcess {
                 try $0.stdio.close()
             }
         } catch {
-            self.logger?.error(
-                "closing process stdio",
-                metadata: [
-                    "id": "\(self.id)",
-                    "error": "\(error)",
-                ])
+            try? await self.agent.close()
+            throw ContainerizationError(
+                .internalError,
+                message: "failed to close stdio",
+                cause: error,
+            )
         }
 
         do {

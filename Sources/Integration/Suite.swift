@@ -23,6 +23,7 @@ import ContainerizationOS
 import Foundation
 import Logging
 import NIOCore
+import NIOPosix
 import Synchronization
 
 actor UnpackCoordinator {
@@ -159,7 +160,9 @@ struct IntegrationSuite: AsyncParsableCommand {
             .appendingPathComponent(name)
     }
 
-    func bootstrap(_ testID: String) async throws -> (rootfs: Containerization.Mount, vmm: VirtualMachineManager, image: Containerization.Image, bootlog: URL) {
+    static let eventLoop = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
+
+    func bootstrap(_ testID: String) async throws -> (rootfs: Containerization.Mount, vmm: VirtualMachineManager, image: Containerization.Image, bootLog: BootLog) {
         let reference = "ghcr.io/linuxcontainers/alpine:3.20"
         let store = Self.imageStore
 
@@ -211,7 +214,7 @@ struct IntegrationSuite: AsyncParsableCommand {
 
         let cl = try fs.clone(to: clPath)
 
-        // Create bootlog directory and per-container bootlog path
+        // Create bootLog directory and per-container bootLog path
         let bootlogDirURL = URL(filePath: bootlogDir)
         try? FileManager.default.createDirectory(at: bootlogDirURL, withIntermediateDirectories: true)
         let bootlogURL = bootlogDirURL.appendingPathComponent("\(testID).log")
@@ -221,9 +224,10 @@ struct IntegrationSuite: AsyncParsableCommand {
             VZVirtualMachineManager(
                 kernel: testKernel,
                 initialFilesystem: initfs,
+                group: Self.eventLoop
             ),
             image,
-            bootlogURL
+            BootLog.file(path: bootlogURL)
         )
     }
 
@@ -282,9 +286,7 @@ struct IntegrationSuite: AsyncParsableCommand {
             Test("container hostname", testHostname),
             Test("container hosts", testHostsFile),
             Test("container mount", testMounts),
-            Test("container pause and resume", testPauseResume),
-            Test("container pause, resume and wait", testPauseResumeWait),
-            Test("container pause, resume and verify io", testPauseResumeIO),
+            Test("container stop idempotency", testContainerStopIdempotency),
             Test("nested virt", testNestedVirtualizationEnabled),
             Test("container manager", testContainerManagerCreate),
             Test("container reuse", testContainerReuse),
@@ -292,6 +294,12 @@ struct IntegrationSuite: AsyncParsableCommand {
             Test("container statistics", testContainerStatistics),
             Test("container cgroup limits", testCgroupLimits),
             Test("container no serial console", testNoSerialConsole),
+            Test("unix socket into guest", testUnixSocketIntoGuest),
+            Test("container non-closure constructor", testNonClosureConstructor),
+            Test("container test large stdio ingest", testLargeStdioOutput),
+            Test("process delete idempotency", testProcessDeleteIdempotency),
+            Test("multiple execs without delete", testMultipleExecsWithoutDelete),
+            Test("container bootlog using filehandle", testBootLogFileHandle),
 
             // Pods
             Test("pod single container", testPodSingleContainer),
@@ -300,7 +308,6 @@ struct IntegrationSuite: AsyncParsableCommand {
             Test("pod concurrent containers", testPodConcurrentContainers),
             Test("pod exec in container", testPodExecInContainer),
             Test("pod container hostname", testPodContainerHostname),
-            Test("pod pause resume", testPodPauseResume),
             Test("pod stop container idempotency", testPodStopContainerIdempotency),
             Test("pod list containers", testPodListContainers),
             Test("pod container statistics", testPodContainerStatistics),

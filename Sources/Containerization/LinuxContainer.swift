@@ -69,6 +69,10 @@ public final class LinuxContainer: Container, Sendable {
         /// Required for WireGuard and other network drivers that need namespace isolation.
         /// vmnet containers don't need this as they use the root namespace.
         public var useNetworkNamespace: Bool = false
+        /// Path to an existing network namespace to join.
+        /// If nil or empty, a new namespace will be created.
+        /// Format: /run/netns/arca-{containerID} for WireGuard networking.
+        public var networkNamespacePath: String?
 
         public init() {}
 
@@ -335,8 +339,11 @@ public final class LinuxContainer: Container, Sendable {
         ]
 
         // Add network namespace if requested (for WireGuard networking)
+        // If networkNamespacePath is set, join that existing namespace
+        // Otherwise, create a new namespace
         if config.useNetworkNamespace {
-            spec.linux?.namespaces.append(LinuxNamespace(type: .network, path: ""))
+            let namespacePath = config.networkNamespacePath ?? ""
+            spec.linux?.namespaces.append(LinuxNamespace(type: .network, path: namespacePath))
         }
 
         return spec
@@ -757,10 +764,24 @@ extension LinuxContainer {
     }
 
     /// Dial a vsock port in the container.
+    /// Works in created, started, or paused states (any state where the VM is running).
     public func dialVsock(port: UInt32) async throws -> FileHandle {
         try await self.state.withLock {
-            let state = try $0.startedState("dialVsock")
-            return try await state.vm.dial(port)
+            switch $0 {
+            case .created(let state):
+                return try await state.vm.dial(port)
+            case .started(let state):
+                return try await state.vm.dial(port)
+            case .paused(let state):
+                return try await state.vm.dial(port)
+            case .errored(let err):
+                throw err
+            default:
+                throw ContainerizationError(
+                    .invalidState,
+                    message: "failed to dialVsock: container VM must be running"
+                )
+            }
         }
     }
 

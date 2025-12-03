@@ -50,6 +50,21 @@ struct App: ParsableCommand {
             StreamLogHandler.standardError(label: label)
         }
     }
+
+    /// File descriptor for /dev/console (VM bootlog)
+    /// Opened once at startup, used by logToConsole()
+    private static let consoleFd: Int32 = open("/dev/console", O_WRONLY | O_NOCTTY)
+
+    /// Write a log message directly to /dev/console (VM bootlog).
+    /// This bypasses the Logging framework to avoid stderr which Docker captures.
+    static func logToConsole(_ message: String) {
+        guard consoleFd >= 0 else { return }
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let line = "\(timestamp) info vmexec : [vmexec] \(message)\n"
+        _ = line.withCString { ptr in
+            Musl.write(consoleFd, ptr, strlen(ptr))
+        }
+    }
 }
 
 extension App {

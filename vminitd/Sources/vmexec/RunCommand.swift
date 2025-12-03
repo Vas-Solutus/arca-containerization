@@ -59,6 +59,7 @@ struct RunCommand: ParsableCommand {
         spec: ContainerizationOCI.Spec,
         ackPipe: FileHandle,
         syncPipe: FileHandle,
+        namespacesToJoin: [(type: String, path: String, flag: Int32)],
         log: Logger
     ) throws {
         guard let process = spec.process else {
@@ -69,6 +70,7 @@ struct RunCommand: ParsableCommand {
         }
 
         // Wait for the grandparent to tell us that they acked our pid.
+        // The network namespace already exists because AddNetwork is called BEFORE container.start().
         guard let data = try ackPipe.read(upToCount: App.ackPid.count) else {
             throw App.Failure(message: "read ack pipe")
         }
@@ -78,6 +80,22 @@ struct RunCommand: ParsableCommand {
 
         guard pidAckStr == App.ackPid else {
             throw App.Failure(message: "received invalid acknowledgement string: \(pidAckStr)")
+        }
+
+        // Join existing namespaces AFTER receiving ack (namespace now exists)
+        for ns in namespacesToJoin {
+            // Use App.logToConsole to write to VM bootlog, not container stderr
+            App.logToConsole("Joining \(ns.type) namespace at \(ns.path)")
+            let fd = open(ns.path, O_RDONLY)
+            guard fd >= 0 else {
+                throw App.Errno(stage: "open(\(ns.path))", info: "Failed to open namespace file")
+            }
+            defer { close(fd) }
+
+            guard setns(fd, ns.flag) == 0 else {
+                throw App.Errno(stage: "setns(\(ns.type))", info: "Failed to join namespace at \(ns.path)")
+            }
+            App.logToConsole("Successfully joined \(ns.type) namespace")
         }
 
         guard unshare(CLONE_NEWCGROUP) == 0 else {
@@ -154,23 +172,49 @@ struct RunCommand: ParsableCommand {
         // Always create PID, mount, and UTS namespaces (Docker standard)
         var unshareFlags: Int32 = CLONE_NEWPID | CLONE_NEWNS | CLONE_NEWUTS
 
+        // Track namespaces to join (those with paths specified in OCI spec)
+        var namespacesToJoin: [(type: String, path: String, flag: Int32)] = []
+
         // Add additional namespaces requested in the OCI spec
         if let linux = spec.linux {
             for namespace in linux.namespaces {
-                switch namespace.type {
-                case .network:
-                    unshareFlags |= CLONE_NEWNET
-                case .ipc:
-                    unshareFlags |= CLONE_NEWIPC
-                case .user:
-                    unshareFlags |= CLONE_NEWUSER
-                // .pid, .mount, .uts, .cgroup are handled separately or already included
-                default:
-                    break
+                // If namespace has a non-empty path, we join it instead of creating new
+                let path = namespace.path
+                if !path.isEmpty {
+                    let flag: Int32
+                    switch namespace.type {
+                    case .network:
+                        flag = CLONE_NEWNET
+                    case .ipc:
+                        flag = CLONE_NEWIPC
+                    case .user:
+                        flag = CLONE_NEWUSER
+                    default:
+                        continue
+                    }
+                    namespacesToJoin.append((type: namespace.type.rawValue, path: path, flag: flag))
+                    // Use App.logToConsole to write to VM bootlog, not container stderr
+                    App.logToConsole("Will join existing \(namespace.type.rawValue) namespace at \(path)")
+                } else {
+                    // No path - create new namespace
+                    switch namespace.type {
+                    case .network:
+                        unshareFlags |= CLONE_NEWNET
+                    case .ipc:
+                        unshareFlags |= CLONE_NEWIPC
+                    case .user:
+                        unshareFlags |= CLONE_NEWUSER
+                    // .pid, .mount, .uts, .cgroup are handled separately or already included
+                    default:
+                        break
+                    }
                 }
             }
         }
 
+        // Create new namespaces via unshare
+        // Note: Joining existing namespaces (those with paths) happens in childSetup()
+        // AFTER receiving ack from ManagedProcess, which waits for namespace to exist
         guard unshare(unshareFlags) == 0 else {
             throw App.Errno(stage: "unshare(namespaces)")
         }
@@ -183,7 +227,7 @@ struct RunCommand: ParsableCommand {
         }
 
         if processID == 0 {  // child
-            try childSetup(spec: spec, ackPipe: ackPipe, syncPipe: syncPipe, log: log)
+            try childSetup(spec: spec, ackPipe: ackPipe, syncPipe: syncPipe, namespacesToJoin: namespacesToJoin, log: log)
         } else {  // parent process
             // Setup cgroup before child enters cgroup namespace
             if let linux = spec.linux {

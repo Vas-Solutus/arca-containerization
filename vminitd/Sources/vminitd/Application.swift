@@ -38,6 +38,43 @@ actor OverlayFSConfig {
     }
 }
 
+/// Wait for a vsock service to become ready by attempting connections
+/// This prevents race conditions where container processes start before services are listening
+private func waitForVsockService(
+    port: UInt32,
+    serviceName: String,
+    timeout: TimeInterval = 5.0,
+    log: Logger
+) async throws {
+    let startTime = Date()
+    var lastError: Error?
+
+    while Date().timeIntervalSince(startTime) < timeout {
+        do {
+            let type = VsockType(port: port, cid: VsockType.localCID)
+            let socket = try Socket(type: type, closeOnDeinit: true)
+            try socket.setTimeout(option: .send, seconds: 1)
+            try socket.setTimeout(option: .receive, seconds: 1)
+            try socket.connect()
+            try socket.close()
+            log.info("\(serviceName) is ready on vsock port \(port)")
+            return
+        } catch {
+            lastError = error
+            try? await Task.sleep(nanoseconds: 50_000_000) // 50ms
+        }
+    }
+
+    log.error("\(serviceName) failed to become ready within \(timeout)s", metadata: [
+        "port": "\(port)",
+        "error": "\(lastError?.localizedDescription ?? "unknown")"
+    ])
+    throw ContainerizationError(
+        .timeout,
+        message: "\(serviceName) not ready on port \(port)"
+    )
+}
+
 @main
 struct Application {
     private static let foregroundEnvVar = "FOREGROUND"
@@ -186,74 +223,33 @@ struct Application {
         }
         t.start()
 
-        // Start arca-wireguard-service in background for WireGuard networking (with integrated DNS)
-        // This service listens on vsock port 51820 (accessible from host via container.dialVsock())
-        let wireGuardServicePath = "/sbin/arca-wireguard-service"
-        let wireGuardServiceExists = FileManager.default.fileExists(atPath: wireGuardServicePath)
-        log.info("arca-wireguard-service binary exists: \(wireGuardServiceExists) at \(wireGuardServicePath)")
+        // Start unified arca-services binary
+        // This starts all container extension services (wireguard, filesystem, process) as goroutines
+        // Services listen on:
+        //   - vsock:51820 - WireGuard network API (with integrated DNS)
+        //   - vsock:51821 - Filesystem operations API
+        //   - vsock:51822 - Process control API
+        //   - vsock:51819 - Ready signal (opens ONLY after all services are fully ready)
+        let arcaServicesPath = "/sbin/arca-services"
+        let arcaServicesExists = FileManager.default.fileExists(atPath: arcaServicesPath)
+        log.info("arca-services binary exists: \(arcaServicesExists) at \(arcaServicesPath)")
 
-        if wireGuardServiceExists {
-            log.info("starting arca-wireguard-service...")
-            var wireGuardService = Command(wireGuardServicePath)
-            // Leave stdin/stdout/stderr as nil for detached background service
-            wireGuardService.stdin = nil
-            wireGuardService.stdout = nil
-            wireGuardService.stderr = .standardError  // Log errors to vminitd stderr
+        if arcaServicesExists {
+            log.info("starting arca-services (unified wireguard, filesystem, process services)...")
+            var arcaServices = Command(arcaServicesPath)
+            arcaServices.stdin = nil
+            arcaServices.stdout = nil
+            arcaServices.stderr = .standardError  // Log errors to vminitd stderr
             do {
-                try wireGuardService.start()
-                log.info("arca-wireguard-service started successfully on vsock port 51820")
+                try arcaServices.start()
+                // Don't wait here - the daemon waits for services via waitForServicesReady() after container.start()
+                // This allows vminitd API to start immediately so the containerization framework doesn't timeout
+                log.info("arca-services started (daemon will wait for ready signal on port 51819)")
             } catch {
-                log.error("failed to start arca-wireguard-service: \(error)")
+                log.error("failed to start arca-services: \(error)")
             }
         } else {
-            log.warning("arca-wireguard-service binary not found at \(wireGuardServicePath), WireGuard networking will not be available")
-        }
-
-        // Start arca-filesystem-service in background for filesystem operations
-        // This service listens on vsock port 51821 (accessible from host via container.dialVsock())
-        // Provides: filesystem sync, upperdir enumeration (docker diff), bind mounts (file volumes), archive operations
-        let filesystemServicePath = "/sbin/arca-filesystem-service"
-        let filesystemServiceExists = FileManager.default.fileExists(atPath: filesystemServicePath)
-        log.info("arca-filesystem-service binary exists: \(filesystemServiceExists) at \(filesystemServicePath)")
-
-        if filesystemServiceExists {
-            log.info("starting arca-filesystem-service...")
-            var filesystemService = Command(filesystemServicePath)
-            // Leave stdin/stdout/stderr as nil for detached background service
-            filesystemService.stdin = nil
-            filesystemService.stdout = nil
-            filesystemService.stderr = .standardError  // Log errors to vminitd stderr
-            do {
-                try filesystemService.start()
-                log.info("arca-filesystem-service started successfully on vsock port 51821")
-            } catch {
-                log.error("failed to start arca-filesystem-service: \(error)")
-            }
-        } else {
-            log.warning("arca-filesystem-service binary not found at \(filesystemServicePath), filesystem operations will not be available")
-        }
-
-        // Start arca-process-service in background for process control
-        // This service listens on vsock port 51822 (accessible from host via container.dialVsock())
-        let processServicePath = "/sbin/arca-process-service"
-        let processServiceExists = FileManager.default.fileExists(atPath: processServicePath)
-        log.info("arca-process-service binary exists: \(processServiceExists) at \(processServicePath)")
-
-        if processServiceExists {
-            log.info("starting arca-process-service...")
-            var processService = Command(processServicePath)
-            // Leave stdin/stdout/stderr as nil for detached background service
-            processService.stdin = nil
-            processService.stdout = nil
-            processService.stderr = .standardError  // Log errors to vminitd stderr
-            do {
-                try processService.start()
-                log.info("arca-process-service started successfully on vsock port 51822")
-            } catch {
-                log.error("failed to start arca-process-service: \(error)")
-            }
-        } else {
-            log.warning("arca-process-service binary not found at \(processServicePath), process listing via gRPC will not be available")
+            log.warning("arca-services binary not found at \(arcaServicesPath), container networking/filesystem/process services will not be available")
         }
 
         // Auto-detect and mount OverlayFS if layer block devices are present

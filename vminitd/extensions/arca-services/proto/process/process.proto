@@ -1,0 +1,104 @@
+syntax = "proto3";
+
+package arca.process.v1;
+
+option go_package = "github.com/vas-solutus/arca-services/proto/process";
+
+// Process control service for container init process lifecycle
+//
+// This service allows external orchestration of the container's init process,
+// enabling pre-start setup (rootfs mounting, networking, etc.) before the
+// container process begins execution.
+//
+// Lifecycle:
+// 1. vminitd boots and performs basic system setup (/proc, /sys, etc.)
+// 2. vminitd starts gRPC services and WAITS for StartProcess RPC
+// 3. External orchestrator performs boot-time setup (OverlayFS, networking)
+// 4. External orchestrator sends StartProcess RPC
+// 5. vminitd starts the container's init process
+service ProcessService {
+    // Check if service is fully initialized and ready to handle requests
+    // Used by vminitd to verify service startup before allowing container creation
+    rpc Ready(ReadyRequest) returns (ReadyResponse);
+
+    // Start the container's init process
+    //
+    // Called after all boot-time setup is complete (rootfs, networking, etc.).
+    // This is the signal for vminitd to begin execution of the container's
+    // configured init process.
+    rpc StartProcess(StartProcessRequest) returns (StartProcessResponse);
+
+    // Get process status
+    //
+    // Returns the current state of the container's init process.
+    rpc GetProcessStatus(GetProcessStatusRequest) returns (GetProcessStatusResponse);
+
+    // List all processes running in the container
+    //
+    // Reads /proc filesystem directly to get process information.
+    // Returns data in ps-compatible format for Docker top API.
+    rpc ListProcesses(ListProcessesRequest) returns (ListProcessesResponse);
+}
+
+// Request to check service readiness
+message ReadyRequest {
+    // No parameters needed
+}
+
+// Response indicating service readiness
+message ReadyResponse {
+    // True if service is fully initialized and ready
+    bool ready = 1;
+
+    // Service version
+    string version = 2;
+
+    // Milliseconds since service started
+    int64 uptime_ms = 3;
+}
+
+message StartProcessRequest {}
+
+message StartProcessResponse {
+    // Success status
+    bool success = 1;
+
+    // Error message if success = false
+    string error_message = 2;
+
+    // PID of started process
+    int32 pid = 3;
+}
+
+message GetProcessStatusRequest {}
+
+message GetProcessStatusResponse {
+    // Process state: "waiting", "running", "exited"
+    string state = 1;
+
+    // PID if running
+    int32 pid = 2;
+
+    // Exit code if exited
+    int32 exit_code = 3;
+}
+
+message ListProcessesRequest {
+    // Optional ps arguments (e.g., "-ef", "-aux")
+    // If empty, defaults to "-ef"
+    string ps_args = 1;
+}
+
+message ListProcessesResponse {
+    // Column titles (e.g., ["UID", "PID", "PPID", "C", "STIME", "TTY", "TIME", "CMD"])
+    repeated string titles = 1;
+
+    // Each process is an array of values corresponding to the titles
+    // For example: [["root", "1", "0", "0", "12:00", "?", "00:00:00", "/bin/sh"]]
+    repeated ProcessInfo processes = 2;
+}
+
+message ProcessInfo {
+    // Values for this process, corresponding to titles in ListProcessesResponse
+    repeated string values = 1;
+}

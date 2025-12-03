@@ -185,6 +185,9 @@ final class RuncProcess: ContainerProcess, Sendable {
             try self.io.closeAfterExec()
         }
 
+        // Network namespace already exists - AddNetwork is called BEFORE container.start()
+        // So we can immediately start the process
+
         try await self.runc.start(id: self.id)
 
         self.state.withLock {

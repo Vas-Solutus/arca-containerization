@@ -151,7 +151,8 @@ final class ManagedProcess: ContainerProcess, Sendable {
 extension ManagedProcess {
     func start() async throws -> Int32 {
         do {
-            return try self.state.withLock {
+            // Phase 1: Start vmexec and get the PID (synchronous with lock)
+            let pid: Int32 = try self.state.withLock {
                 log.info(
                     "starting managed process",
                     metadata: [
@@ -160,14 +161,6 @@ extension ManagedProcess {
 
                 // Start the underlying process.
                 try command.start()
-
-                defer {
-                    try? self.ackPipe.fileHandleForWriting.close()
-                    try? self.syncPipe.fileHandleForReading.close()
-                    try? self.ackPipe.fileHandleForReading.close()
-                    try? self.syncPipe.fileHandleForWriting.close()
-                    try? self.errorPipe.fileHandleForWriting.close()
-                }
 
                 // Close our side of any pipes.
                 try $0.io.closeAfterExec()
@@ -201,53 +194,74 @@ extension ManagedProcess {
                     try cgManager.addProcess(pid: pid)
                 }
 
-                log.info(
-                    "sending pid acknowledgement",
-                    metadata: [
-                        "pid": "\(pid)"
-                    ])
-                try self.ackPipe.fileHandleForWriting.write(contentsOf: Self.ackPid.data(using: .utf8)!)
-
-                if self.terminal {
-                    log.info(
-                        "wait for PTY FD",
-                        metadata: [
-                            "id": "\(id)"
-                        ])
-
-                    // Wait for a new write that will contain the pty fd if we asked for one.
-                    guard let ptyFd = try self.syncPipe.fileHandleForReading.read(upToCount: size) else {
-                        throw ContainerizationError(
-                            .internalError,
-                            message: "no PTY data from sync pipe"
-                        )
-                    }
-                    let fd = ptyFd.withUnsafeBytes { ptr in
-                        ptr.load(as: Int32.self)
-                    }
-                    log.info(
-                        "received PTY FD from container, attaching",
-                        metadata: [
-                            "id": "\(id)"
-                        ])
-
-                    try $0.io.attach(pid: pid, fd: fd)
-                    try self.ackPipe.fileHandleForWriting.write(contentsOf: Self.ackConsole.data(using: .utf8)!)
-                }
-
-                // Wait for the syncPipe to close (after exec).
-                _ = try self.syncPipe.fileHandleForReading.readToEnd()
-
-                log.info(
-                    "started managed process",
-                    metadata: [
-                        "pid": "\(pid)",
-                        "id": "\(id)",
-                    ])
-
                 return pid
             }
+
+            // Network namespace already exists - AddNetwork is called BEFORE container.start()
+            // So we can immediately send ack to vmexec to proceed
+            log.info(
+                "sending pid acknowledgement",
+                metadata: [
+                    "pid": "\(pid)"
+                ])
+            try self.ackPipe.fileHandleForWriting.write(contentsOf: Self.ackPid.data(using: .utf8)!)
+
+            if self.terminal {
+                log.info(
+                    "wait for PTY FD",
+                    metadata: [
+                        "id": "\(id)"
+                    ])
+
+                let size = MemoryLayout<Int32>.size
+                // Wait for a new write that will contain the pty fd if we asked for one.
+                guard let ptyFd = try self.syncPipe.fileHandleForReading.read(upToCount: size) else {
+                    throw ContainerizationError(
+                        .internalError,
+                        message: "no PTY data from sync pipe"
+                    )
+                }
+                let fd = ptyFd.withUnsafeBytes { ptr in
+                    ptr.load(as: Int32.self)
+                }
+                log.info(
+                    "received PTY FD from container, attaching",
+                    metadata: [
+                        "id": "\(id)"
+                    ])
+
+                try self.state.withLock {
+                    try $0.io.attach(pid: pid, fd: fd)
+                }
+                try self.ackPipe.fileHandleForWriting.write(contentsOf: Self.ackConsole.data(using: .utf8)!)
+            }
+
+            // Wait for the syncPipe to close (after exec).
+            _ = try self.syncPipe.fileHandleForReading.readToEnd()
+
+            // Cleanup pipes
+            try? self.ackPipe.fileHandleForWriting.close()
+            try? self.syncPipe.fileHandleForReading.close()
+            try? self.ackPipe.fileHandleForReading.close()
+            try? self.syncPipe.fileHandleForWriting.close()
+            try? self.errorPipe.fileHandleForWriting.close()
+
+            log.info(
+                "started managed process",
+                metadata: [
+                    "pid": "\(pid)",
+                    "id": "\(id)",
+                ])
+
+            return pid
         } catch {
+            // Cleanup pipes on error
+            try? self.ackPipe.fileHandleForWriting.close()
+            try? self.syncPipe.fileHandleForReading.close()
+            try? self.ackPipe.fileHandleForReading.close()
+            try? self.syncPipe.fileHandleForWriting.close()
+            try? self.errorPipe.fileHandleForWriting.close()
+
             if let errorData = try? self.errorPipe.fileHandleForReading.readToEnd(),
                 let errorString = String(data: errorData, encoding: .utf8),
                 !errorString.isEmpty

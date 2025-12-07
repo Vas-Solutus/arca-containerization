@@ -61,6 +61,11 @@ service FilesystemService {
     // Provides full POSIX compliance without OverlayFS (allows nested overlays)
     // Used for named volumes (local driver) that don't need host file access
     rpc CreateDirectMount(CreateDirectMountRequest) returns (CreateDirectMountResponse);
+
+    // Generate /etc/hosts file for container
+    // Creates the standard Docker hosts file with localhost entries and container hostname
+    // Docker generates this file; we need to do the same for compatibility
+    rpc GenerateHostsFile(GenerateHostsFileRequest) returns (GenerateHostsFileResponse);
 }
 
 // Request to check service readiness
@@ -285,6 +290,34 @@ message CreateDirectMountRequest {
 }
 
 message CreateDirectMountResponse {
+    // Success status
+    bool success = 1;
+
+    // Error message if success = false
+    string error = 2;
+}
+
+// Request to generate /etc/hosts file for a container
+// Docker generates this file with localhost entries and container hostname
+message GenerateHostsFileRequest {
+    // Container ID (for resolving container rootfs path)
+    string container_id = 1;
+
+    // Container hostname (typically the short container ID or user-specified hostname)
+    string hostname = 2;
+
+    // Container's IP address (e.g., "10.89.0.2")
+    string ip_address = 3;
+
+    // Container name (without leading slash, e.g., "my-container")
+    string container_name = 4;
+
+    // Extra hosts to add (from --add-host flag)
+    // Format: "hostname:ip"
+    repeated string extra_hosts = 5;
+}
+
+message GenerateHostsFileResponse {
     // Success status
     bool success = 1;
 

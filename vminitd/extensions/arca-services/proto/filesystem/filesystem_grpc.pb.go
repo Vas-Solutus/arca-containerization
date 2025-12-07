@@ -37,6 +37,7 @@ const (
 	FilesystemService_StatPath_FullMethodName            = "/arca.filesystem.v1.FilesystemService/StatPath"
 	FilesystemService_CreateVolumeOverlay_FullMethodName = "/arca.filesystem.v1.FilesystemService/CreateVolumeOverlay"
 	FilesystemService_CreateDirectMount_FullMethodName   = "/arca.filesystem.v1.FilesystemService/CreateDirectMount"
+	FilesystemService_GenerateHostsFile_FullMethodName   = "/arca.filesystem.v1.FilesystemService/GenerateHostsFile"
 )
 
 // FilesystemServiceClient is the client API for FilesystemService service.
@@ -83,6 +84,10 @@ type FilesystemServiceClient interface {
 	// Provides full POSIX compliance without OverlayFS (allows nested overlays)
 	// Used for named volumes (local driver) that don't need host file access
 	CreateDirectMount(ctx context.Context, in *CreateDirectMountRequest, opts ...grpc.CallOption) (*CreateDirectMountResponse, error)
+	// Generate /etc/hosts file for container
+	// Creates the standard Docker hosts file with localhost entries and container hostname
+	// Docker generates this file; we need to do the same for compatibility
+	GenerateHostsFile(ctx context.Context, in *GenerateHostsFileRequest, opts ...grpc.CallOption) (*GenerateHostsFileResponse, error)
 }
 
 type filesystemServiceClient struct {
@@ -183,6 +188,16 @@ func (c *filesystemServiceClient) CreateDirectMount(ctx context.Context, in *Cre
 	return out, nil
 }
 
+func (c *filesystemServiceClient) GenerateHostsFile(ctx context.Context, in *GenerateHostsFileRequest, opts ...grpc.CallOption) (*GenerateHostsFileResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GenerateHostsFileResponse)
+	err := c.cc.Invoke(ctx, FilesystemService_GenerateHostsFile_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // FilesystemServiceServer is the server API for FilesystemService service.
 // All implementations must embed UnimplementedFilesystemServiceServer
 // for forward compatibility.
@@ -227,6 +242,10 @@ type FilesystemServiceServer interface {
 	// Provides full POSIX compliance without OverlayFS (allows nested overlays)
 	// Used for named volumes (local driver) that don't need host file access
 	CreateDirectMount(context.Context, *CreateDirectMountRequest) (*CreateDirectMountResponse, error)
+	// Generate /etc/hosts file for container
+	// Creates the standard Docker hosts file with localhost entries and container hostname
+	// Docker generates this file; we need to do the same for compatibility
+	GenerateHostsFile(context.Context, *GenerateHostsFileRequest) (*GenerateHostsFileResponse, error)
 	mustEmbedUnimplementedFilesystemServiceServer()
 }
 
@@ -263,6 +282,9 @@ func (UnimplementedFilesystemServiceServer) CreateVolumeOverlay(context.Context,
 }
 func (UnimplementedFilesystemServiceServer) CreateDirectMount(context.Context, *CreateDirectMountRequest) (*CreateDirectMountResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CreateDirectMount not implemented")
+}
+func (UnimplementedFilesystemServiceServer) GenerateHostsFile(context.Context, *GenerateHostsFileRequest) (*GenerateHostsFileResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GenerateHostsFile not implemented")
 }
 func (UnimplementedFilesystemServiceServer) mustEmbedUnimplementedFilesystemServiceServer() {}
 func (UnimplementedFilesystemServiceServer) testEmbeddedByValue()                           {}
@@ -447,6 +469,24 @@ func _FilesystemService_CreateDirectMount_Handler(srv interface{}, ctx context.C
 	return interceptor(ctx, in, info, handler)
 }
 
+func _FilesystemService_GenerateHostsFile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GenerateHostsFileRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FilesystemServiceServer).GenerateHostsFile(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FilesystemService_GenerateHostsFile_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FilesystemServiceServer).GenerateHostsFile(ctx, req.(*GenerateHostsFileRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // FilesystemService_ServiceDesc is the grpc.ServiceDesc for FilesystemService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -489,6 +529,10 @@ var FilesystemService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CreateDirectMount",
 			Handler:    _FilesystemService_CreateDirectMount_Handler,
+		},
+		{
+			MethodName: "GenerateHostsFile",
+			Handler:    _FilesystemService_GenerateHostsFile_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

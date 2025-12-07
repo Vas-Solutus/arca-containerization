@@ -878,3 +878,78 @@ func (s *Server) StatPath(ctx context.Context, req *pb.StatPathRequest) (*pb.Sta
 		Stat:    stat,
 	}, nil
 }
+
+// GenerateHostsFile creates the /etc/hosts file for a container
+// Docker generates this file; we need to do the same for compatibility
+// Format follows Docker's standard /etc/hosts structure
+func (s *Server) GenerateHostsFile(ctx context.Context, req *pb.GenerateHostsFileRequest) (*pb.GenerateHostsFileResponse, error) {
+	log.Printf("GenerateHostsFile: container=%s hostname=%s ip=%s name=%s",
+		req.ContainerId, req.Hostname, req.IpAddress, req.ContainerName)
+
+	// Build the /etc/hosts content following Docker's format
+	var content strings.Builder
+
+	// Standard localhost entries
+	content.WriteString("127.0.0.1\tlocalhost\n")
+	content.WriteString("::1\tlocalhost ip6-localhost ip6-loopback\n")
+	content.WriteString("fe00::0\tip6-localnet\n")
+	content.WriteString("ff00::0\tip6-mcastprefix\n")
+	content.WriteString("ff02::1\tip6-allnodes\n")
+	content.WriteString("ff02::2\tip6-allrouters\n")
+
+	// Container's own entry: IP + hostname + name (if different)
+	if req.IpAddress != "" && req.Hostname != "" {
+		entry := req.IpAddress + "\t" + req.Hostname
+		// Add container name if different from hostname
+		if req.ContainerName != "" && req.ContainerName != req.Hostname {
+			entry += " " + req.ContainerName
+		}
+		content.WriteString(entry + "\n")
+		log.Printf("Added container entry: %s", entry)
+	}
+
+	// Add extra hosts from --add-host flag
+	for _, extraHost := range req.ExtraHosts {
+		// Format: "hostname:ip"
+		parts := strings.SplitN(extraHost, ":", 2)
+		if len(parts) == 2 {
+			hostname := parts[0]
+			ip := parts[1]
+			entry := ip + "\t" + hostname
+			content.WriteString(entry + "\n")
+			log.Printf("Added extra host: %s", entry)
+		} else {
+			log.Printf("Skipping invalid extra host format: %s", extraHost)
+		}
+	}
+
+	// Resolve /etc/hosts path in container rootfs
+	hostsPath := fmt.Sprintf("/run/container/%s/rootfs/etc/hosts", req.ContainerId)
+	log.Printf("Writing /etc/hosts to: %s", hostsPath)
+
+	// Ensure /etc directory exists
+	etcDir := fmt.Sprintf("/run/container/%s/rootfs/etc", req.ContainerId)
+	if err := os.MkdirAll(etcDir, 0755); err != nil {
+		errMsg := fmt.Sprintf("failed to create /etc directory: %v", err)
+		log.Printf("ERROR: %s", errMsg)
+		return &pb.GenerateHostsFileResponse{
+			Success: false,
+			Error:   errMsg,
+		}, nil
+	}
+
+	// Write /etc/hosts file with standard permissions (644)
+	if err := ioutil.WriteFile(hostsPath, []byte(content.String()), 0644); err != nil {
+		errMsg := fmt.Sprintf("failed to write /etc/hosts: %v", err)
+		log.Printf("ERROR: %s", errMsg)
+		return &pb.GenerateHostsFileResponse{
+			Success: false,
+			Error:   errMsg,
+		}, nil
+	}
+
+	log.Printf("GenerateHostsFile complete: wrote %d bytes to %s", len(content.String()), hostsPath)
+	return &pb.GenerateHostsFileResponse{
+		Success: true,
+	}, nil
+}

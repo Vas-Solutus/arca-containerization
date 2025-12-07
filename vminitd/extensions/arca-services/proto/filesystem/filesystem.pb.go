@@ -1245,6 +1245,144 @@ func (x *CreateDirectMountResponse) GetError() string {
 	return ""
 }
 
+// Request to generate /etc/hosts file for a container
+// Docker generates this file with localhost entries and container hostname
+type GenerateHostsFileRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Container ID (for resolving container rootfs path)
+	ContainerId string `protobuf:"bytes,1,opt,name=container_id,json=containerId,proto3" json:"container_id,omitempty"`
+	// Container hostname (typically the short container ID or user-specified hostname)
+	Hostname string `protobuf:"bytes,2,opt,name=hostname,proto3" json:"hostname,omitempty"`
+	// Container's IP address (e.g., "10.89.0.2")
+	IpAddress string `protobuf:"bytes,3,opt,name=ip_address,json=ipAddress,proto3" json:"ip_address,omitempty"`
+	// Container name (without leading slash, e.g., "my-container")
+	ContainerName string `protobuf:"bytes,4,opt,name=container_name,json=containerName,proto3" json:"container_name,omitempty"`
+	// Extra hosts to add (from --add-host flag)
+	// Format: "hostname:ip"
+	ExtraHosts    []string `protobuf:"bytes,5,rep,name=extra_hosts,json=extraHosts,proto3" json:"extra_hosts,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GenerateHostsFileRequest) Reset() {
+	*x = GenerateHostsFileRequest{}
+	mi := &file_filesystem_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GenerateHostsFileRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GenerateHostsFileRequest) ProtoMessage() {}
+
+func (x *GenerateHostsFileRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_filesystem_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GenerateHostsFileRequest.ProtoReflect.Descriptor instead.
+func (*GenerateHostsFileRequest) Descriptor() ([]byte, []int) {
+	return file_filesystem_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *GenerateHostsFileRequest) GetContainerId() string {
+	if x != nil {
+		return x.ContainerId
+	}
+	return ""
+}
+
+func (x *GenerateHostsFileRequest) GetHostname() string {
+	if x != nil {
+		return x.Hostname
+	}
+	return ""
+}
+
+func (x *GenerateHostsFileRequest) GetIpAddress() string {
+	if x != nil {
+		return x.IpAddress
+	}
+	return ""
+}
+
+func (x *GenerateHostsFileRequest) GetContainerName() string {
+	if x != nil {
+		return x.ContainerName
+	}
+	return ""
+}
+
+func (x *GenerateHostsFileRequest) GetExtraHosts() []string {
+	if x != nil {
+		return x.ExtraHosts
+	}
+	return nil
+}
+
+type GenerateHostsFileResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Success status
+	Success bool `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	// Error message if success = false
+	Error         string `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GenerateHostsFileResponse) Reset() {
+	*x = GenerateHostsFileResponse{}
+	mi := &file_filesystem_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GenerateHostsFileResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GenerateHostsFileResponse) ProtoMessage() {}
+
+func (x *GenerateHostsFileResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_filesystem_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GenerateHostsFileResponse.ProtoReflect.Descriptor instead.
+func (*GenerateHostsFileResponse) Descriptor() ([]byte, []int) {
+	return file_filesystem_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *GenerateHostsFileResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *GenerateHostsFileResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 var File_filesystem_proto protoreflect.FileDescriptor
 
 const file_filesystem_proto_rawDesc = "" +
@@ -1324,7 +1462,18 @@ const file_filesystem_proto_rawDesc = "" +
 	"\x06target\x18\x03 \x01(\tR\x06target\"K\n" +
 	"\x19CreateDirectMountResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error2\xac\a\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"\xc0\x01\n" +
+	"\x18GenerateHostsFileRequest\x12!\n" +
+	"\fcontainer_id\x18\x01 \x01(\tR\vcontainerId\x12\x1a\n" +
+	"\bhostname\x18\x02 \x01(\tR\bhostname\x12\x1d\n" +
+	"\n" +
+	"ip_address\x18\x03 \x01(\tR\tipAddress\x12%\n" +
+	"\x0econtainer_name\x18\x04 \x01(\tR\rcontainerName\x12\x1f\n" +
+	"\vextra_hosts\x18\x05 \x03(\tR\n" +
+	"extraHosts\"K\n" +
+	"\x19GenerateHostsFileResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error2\x9e\b\n" +
 	"\x11FilesystemService\x12L\n" +
 	"\x05Ready\x12 .arca.filesystem.v1.ReadyRequest\x1a!.arca.filesystem.v1.ReadyResponse\x12g\n" +
 	"\x0eSyncFilesystem\x12).arca.filesystem.v1.SyncFilesystemRequest\x1a*.arca.filesystem.v1.SyncFilesystemResponse\x12p\n" +
@@ -1334,7 +1483,8 @@ const file_filesystem_proto_rawDesc = "" +
 	"\x0fCreateBindMount\x12*.arca.filesystem.v1.CreateBindMountRequest\x1a+.arca.filesystem.v1.CreateBindMountResponse\x12U\n" +
 	"\bStatPath\x12#.arca.filesystem.v1.StatPathRequest\x1a$.arca.filesystem.v1.StatPathResponse\x12v\n" +
 	"\x13CreateVolumeOverlay\x12..arca.filesystem.v1.CreateVolumeOverlayRequest\x1a/.arca.filesystem.v1.CreateVolumeOverlayResponse\x12p\n" +
-	"\x11CreateDirectMount\x12,.arca.filesystem.v1.CreateDirectMountRequest\x1a-.arca.filesystem.v1.CreateDirectMountResponseB7Z5github.com/vas-solutus/arca-services/proto/filesystemb\x06proto3"
+	"\x11CreateDirectMount\x12,.arca.filesystem.v1.CreateDirectMountRequest\x1a-.arca.filesystem.v1.CreateDirectMountResponse\x12p\n" +
+	"\x11GenerateHostsFile\x12,.arca.filesystem.v1.GenerateHostsFileRequest\x1a-.arca.filesystem.v1.GenerateHostsFileResponseB7Z5github.com/vas-solutus/arca-services/proto/filesystemb\x06proto3"
 
 var (
 	file_filesystem_proto_rawDescOnce sync.Once
@@ -1348,7 +1498,7 @@ func file_filesystem_proto_rawDescGZIP() []byte {
 	return file_filesystem_proto_rawDescData
 }
 
-var file_filesystem_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
+var file_filesystem_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
 var file_filesystem_proto_goTypes = []any{
 	(*ReadyRequest)(nil),                // 0: arca.filesystem.v1.ReadyRequest
 	(*ReadyResponse)(nil),               // 1: arca.filesystem.v1.ReadyResponse
@@ -1370,6 +1520,8 @@ var file_filesystem_proto_goTypes = []any{
 	(*CreateVolumeOverlayResponse)(nil), // 17: arca.filesystem.v1.CreateVolumeOverlayResponse
 	(*CreateDirectMountRequest)(nil),    // 18: arca.filesystem.v1.CreateDirectMountRequest
 	(*CreateDirectMountResponse)(nil),   // 19: arca.filesystem.v1.CreateDirectMountResponse
+	(*GenerateHostsFileRequest)(nil),    // 20: arca.filesystem.v1.GenerateHostsFileRequest
+	(*GenerateHostsFileResponse)(nil),   // 21: arca.filesystem.v1.GenerateHostsFileResponse
 }
 var file_filesystem_proto_depIdxs = []int32{
 	6,  // 0: arca.filesystem.v1.EnumerateUpperdirResponse.entries:type_name -> arca.filesystem.v1.UpperdirEntry
@@ -1384,17 +1536,19 @@ var file_filesystem_proto_depIdxs = []int32{
 	14, // 9: arca.filesystem.v1.FilesystemService.StatPath:input_type -> arca.filesystem.v1.StatPathRequest
 	16, // 10: arca.filesystem.v1.FilesystemService.CreateVolumeOverlay:input_type -> arca.filesystem.v1.CreateVolumeOverlayRequest
 	18, // 11: arca.filesystem.v1.FilesystemService.CreateDirectMount:input_type -> arca.filesystem.v1.CreateDirectMountRequest
-	1,  // 12: arca.filesystem.v1.FilesystemService.Ready:output_type -> arca.filesystem.v1.ReadyResponse
-	3,  // 13: arca.filesystem.v1.FilesystemService.SyncFilesystem:output_type -> arca.filesystem.v1.SyncFilesystemResponse
-	5,  // 14: arca.filesystem.v1.FilesystemService.EnumerateUpperdir:output_type -> arca.filesystem.v1.EnumerateUpperdirResponse
-	8,  // 15: arca.filesystem.v1.FilesystemService.ReadArchive:output_type -> arca.filesystem.v1.ReadArchiveResponse
-	11, // 16: arca.filesystem.v1.FilesystemService.WriteArchive:output_type -> arca.filesystem.v1.WriteArchiveResponse
-	13, // 17: arca.filesystem.v1.FilesystemService.CreateBindMount:output_type -> arca.filesystem.v1.CreateBindMountResponse
-	15, // 18: arca.filesystem.v1.FilesystemService.StatPath:output_type -> arca.filesystem.v1.StatPathResponse
-	17, // 19: arca.filesystem.v1.FilesystemService.CreateVolumeOverlay:output_type -> arca.filesystem.v1.CreateVolumeOverlayResponse
-	19, // 20: arca.filesystem.v1.FilesystemService.CreateDirectMount:output_type -> arca.filesystem.v1.CreateDirectMountResponse
-	12, // [12:21] is the sub-list for method output_type
-	3,  // [3:12] is the sub-list for method input_type
+	20, // 12: arca.filesystem.v1.FilesystemService.GenerateHostsFile:input_type -> arca.filesystem.v1.GenerateHostsFileRequest
+	1,  // 13: arca.filesystem.v1.FilesystemService.Ready:output_type -> arca.filesystem.v1.ReadyResponse
+	3,  // 14: arca.filesystem.v1.FilesystemService.SyncFilesystem:output_type -> arca.filesystem.v1.SyncFilesystemResponse
+	5,  // 15: arca.filesystem.v1.FilesystemService.EnumerateUpperdir:output_type -> arca.filesystem.v1.EnumerateUpperdirResponse
+	8,  // 16: arca.filesystem.v1.FilesystemService.ReadArchive:output_type -> arca.filesystem.v1.ReadArchiveResponse
+	11, // 17: arca.filesystem.v1.FilesystemService.WriteArchive:output_type -> arca.filesystem.v1.WriteArchiveResponse
+	13, // 18: arca.filesystem.v1.FilesystemService.CreateBindMount:output_type -> arca.filesystem.v1.CreateBindMountResponse
+	15, // 19: arca.filesystem.v1.FilesystemService.StatPath:output_type -> arca.filesystem.v1.StatPathResponse
+	17, // 20: arca.filesystem.v1.FilesystemService.CreateVolumeOverlay:output_type -> arca.filesystem.v1.CreateVolumeOverlayResponse
+	19, // 21: arca.filesystem.v1.FilesystemService.CreateDirectMount:output_type -> arca.filesystem.v1.CreateDirectMountResponse
+	21, // 22: arca.filesystem.v1.FilesystemService.GenerateHostsFile:output_type -> arca.filesystem.v1.GenerateHostsFileResponse
+	13, // [13:23] is the sub-list for method output_type
+	3,  // [3:13] is the sub-list for method input_type
 	3,  // [3:3] is the sub-list for extension type_name
 	3,  // [3:3] is the sub-list for extension extendee
 	0,  // [0:3] is the sub-list for field type_name
@@ -1411,7 +1565,7 @@ func file_filesystem_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_filesystem_proto_rawDesc), len(file_filesystem_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   20,
+			NumMessages:   22,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

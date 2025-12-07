@@ -28,12 +28,14 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	FilesystemService_Ready_FullMethodName             = "/arca.filesystem.v1.FilesystemService/Ready"
-	FilesystemService_SyncFilesystem_FullMethodName    = "/arca.filesystem.v1.FilesystemService/SyncFilesystem"
-	FilesystemService_EnumerateUpperdir_FullMethodName = "/arca.filesystem.v1.FilesystemService/EnumerateUpperdir"
-	FilesystemService_ReadArchive_FullMethodName       = "/arca.filesystem.v1.FilesystemService/ReadArchive"
-	FilesystemService_WriteArchive_FullMethodName      = "/arca.filesystem.v1.FilesystemService/WriteArchive"
-	FilesystemService_CreateBindMount_FullMethodName   = "/arca.filesystem.v1.FilesystemService/CreateBindMount"
+	FilesystemService_Ready_FullMethodName               = "/arca.filesystem.v1.FilesystemService/Ready"
+	FilesystemService_SyncFilesystem_FullMethodName      = "/arca.filesystem.v1.FilesystemService/SyncFilesystem"
+	FilesystemService_EnumerateUpperdir_FullMethodName   = "/arca.filesystem.v1.FilesystemService/EnumerateUpperdir"
+	FilesystemService_ReadArchive_FullMethodName         = "/arca.filesystem.v1.FilesystemService/ReadArchive"
+	FilesystemService_WriteArchive_FullMethodName        = "/arca.filesystem.v1.FilesystemService/WriteArchive"
+	FilesystemService_CreateBindMount_FullMethodName     = "/arca.filesystem.v1.FilesystemService/CreateBindMount"
+	FilesystemService_StatPath_FullMethodName            = "/arca.filesystem.v1.FilesystemService/StatPath"
+	FilesystemService_CreateVolumeOverlay_FullMethodName = "/arca.filesystem.v1.FilesystemService/CreateVolumeOverlay"
 )
 
 // FilesystemServiceClient is the client API for FilesystemService service.
@@ -66,6 +68,15 @@ type FilesystemServiceClient interface {
 	// Works like "mount --bind /source /target" inside the container
 	// Used for file bind mounts (VirtioFS only supports directory shares)
 	CreateBindMount(ctx context.Context, in *CreateBindMountRequest, opts ...grpc.CallOption) (*CreateBindMountResponse, error)
+	// Stat path - check if a path exists and get metadata
+	// Used for HEAD requests on archive endpoint
+	StatPath(ctx context.Context, in *StatPathRequest, opts ...grpc.CallOption) (*StatPathResponse, error)
+	// Create volume overlay - create OverlayFS mount for a volume
+	// Overlays an EXT4 upper layer on top of VirtioFS lower layer
+	// This provides full POSIX compliance (Unix sockets, chmod) while maintaining
+	// read access to host files via VirtioFS
+	// Used for k3d/kind support where volumes need Unix socket support
+	CreateVolumeOverlay(ctx context.Context, in *CreateVolumeOverlayRequest, opts ...grpc.CallOption) (*CreateVolumeOverlayResponse, error)
 }
 
 type filesystemServiceClient struct {
@@ -136,6 +147,26 @@ func (c *filesystemServiceClient) CreateBindMount(ctx context.Context, in *Creat
 	return out, nil
 }
 
+func (c *filesystemServiceClient) StatPath(ctx context.Context, in *StatPathRequest, opts ...grpc.CallOption) (*StatPathResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(StatPathResponse)
+	err := c.cc.Invoke(ctx, FilesystemService_StatPath_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *filesystemServiceClient) CreateVolumeOverlay(ctx context.Context, in *CreateVolumeOverlayRequest, opts ...grpc.CallOption) (*CreateVolumeOverlayResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateVolumeOverlayResponse)
+	err := c.cc.Invoke(ctx, FilesystemService_CreateVolumeOverlay_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // FilesystemServiceServer is the server API for FilesystemService service.
 // All implementations must embed UnimplementedFilesystemServiceServer
 // for forward compatibility.
@@ -166,6 +197,15 @@ type FilesystemServiceServer interface {
 	// Works like "mount --bind /source /target" inside the container
 	// Used for file bind mounts (VirtioFS only supports directory shares)
 	CreateBindMount(context.Context, *CreateBindMountRequest) (*CreateBindMountResponse, error)
+	// Stat path - check if a path exists and get metadata
+	// Used for HEAD requests on archive endpoint
+	StatPath(context.Context, *StatPathRequest) (*StatPathResponse, error)
+	// Create volume overlay - create OverlayFS mount for a volume
+	// Overlays an EXT4 upper layer on top of VirtioFS lower layer
+	// This provides full POSIX compliance (Unix sockets, chmod) while maintaining
+	// read access to host files via VirtioFS
+	// Used for k3d/kind support where volumes need Unix socket support
+	CreateVolumeOverlay(context.Context, *CreateVolumeOverlayRequest) (*CreateVolumeOverlayResponse, error)
 	mustEmbedUnimplementedFilesystemServiceServer()
 }
 
@@ -193,6 +233,12 @@ func (UnimplementedFilesystemServiceServer) WriteArchive(context.Context, *Write
 }
 func (UnimplementedFilesystemServiceServer) CreateBindMount(context.Context, *CreateBindMountRequest) (*CreateBindMountResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CreateBindMount not implemented")
+}
+func (UnimplementedFilesystemServiceServer) StatPath(context.Context, *StatPathRequest) (*StatPathResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method StatPath not implemented")
+}
+func (UnimplementedFilesystemServiceServer) CreateVolumeOverlay(context.Context, *CreateVolumeOverlayRequest) (*CreateVolumeOverlayResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateVolumeOverlay not implemented")
 }
 func (UnimplementedFilesystemServiceServer) mustEmbedUnimplementedFilesystemServiceServer() {}
 func (UnimplementedFilesystemServiceServer) testEmbeddedByValue()                           {}
@@ -323,6 +369,42 @@ func _FilesystemService_CreateBindMount_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _FilesystemService_StatPath_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StatPathRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FilesystemServiceServer).StatPath(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FilesystemService_StatPath_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FilesystemServiceServer).StatPath(ctx, req.(*StatPathRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FilesystemService_CreateVolumeOverlay_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateVolumeOverlayRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FilesystemServiceServer).CreateVolumeOverlay(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FilesystemService_CreateVolumeOverlay_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FilesystemServiceServer).CreateVolumeOverlay(ctx, req.(*CreateVolumeOverlayRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // FilesystemService_ServiceDesc is the grpc.ServiceDesc for FilesystemService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -353,6 +435,14 @@ var FilesystemService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CreateBindMount",
 			Handler:    _FilesystemService_CreateBindMount_Handler,
+		},
+		{
+			MethodName: "StatPath",
+			Handler:    _FilesystemService_StatPath_Handler,
+		},
+		{
+			MethodName: "CreateVolumeOverlay",
+			Handler:    _FilesystemService_CreateVolumeOverlay_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

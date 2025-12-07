@@ -133,6 +133,10 @@ extension Mount {
     }
 
     private func mountToTarget(target: String, createWithPerms: Int16?) throws {
+        // Debug logging for VirtioFS mounts
+        fputs("[Mount.mountToTarget] type=\(self.type) source=\(self.source) target=\(target)\n", stderr)
+        fflush(stderr)
+
         let pageSize = sysconf(Int32(_SC_PAGESIZE))
 
         let opts = parseMountOptions()
@@ -168,13 +172,20 @@ extension Mount {
         }
 
         if opts.flags & Int32(MS_REMOUNT) == 0 || !dataString.isEmpty {
+            fputs("[Mount.mountToTarget] calling mount() syscall...\n", stderr)
+            fflush(stderr)
             let result = _mount(self.source, target, self.type, UInt(originalFlags), dataString)
             if result != 0 {
+                let errCode = errno
+                fputs("[Mount.mountToTarget] mount FAILED: errno=\(errCode)\n", stderr)
+                fflush(stderr)
                 throw Error.errno(
-                    errno,
+                    errCode,
                     "failed initial mount source=\(self.source) target=\(target) type=\(self.type) flags=\(originalFlags) data=\(dataString)"
                 )
             }
+            fputs("[Mount.mountToTarget] mount SUCCESS\n", stderr)
+            fflush(stderr)
         }
 
         if opts.flags & propagationTypes != 0 {

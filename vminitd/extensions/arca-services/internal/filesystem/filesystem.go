@@ -242,9 +242,10 @@ func (s *Server) EnumerateUpperdir(ctx context.Context, req *pb.EnumerateUpperdi
 func (s *Server) ReadArchive(ctx context.Context, req *pb.ReadArchiveRequest) (*pb.ReadArchiveResponse, error) {
 	log.Printf("ReadArchive: container=%s path=%s", req.ContainerId, req.Path)
 
-	// Resolve container rootfs path
+	// Resolve source path - always relative to container rootfs
 	rootfsPath := fmt.Sprintf("/run/container/%s/rootfs", req.ContainerId)
 	fullPath := filepath.Join(rootfsPath, req.Path)
+	log.Printf("ReadArchive: Using container path: %s", fullPath)
 
 	// Get file info for the path
 	info, err := os.Lstat(fullPath)
@@ -255,16 +256,14 @@ func (s *Server) ReadArchive(ctx context.Context, req *pb.ReadArchiveRequest) (*
 		}, nil
 	}
 
-	// Create tar archive in memory
+	// Create plain tar archive in memory (Docker CLI expects uncompressed tar)
 	var buf bytes.Buffer
-	gzWriter := gzip.NewWriter(&buf)
-	tarWriter := tar.NewWriter(gzWriter)
+	tarWriter := tar.NewWriter(&buf)
 
 	// Add files to tar
 	err = addToTar(tarWriter, fullPath, filepath.Base(req.Path), info)
 	if err != nil {
 		tarWriter.Close()
-		gzWriter.Close()
 		return &pb.ReadArchiveResponse{
 			Success: false,
 			Error:   fmt.Sprintf("failed to create tar: %v", err),
@@ -272,7 +271,6 @@ func (s *Server) ReadArchive(ctx context.Context, req *pb.ReadArchiveRequest) (*
 	}
 
 	tarWriter.Close()
-	gzWriter.Close()
 
 	// Create PathStat for response header
 	stat := &pb.PathStat{
@@ -358,13 +356,15 @@ func addToTar(tw *tar.Writer, fullPath, nameInTar string, info os.FileInfo) erro
 
 // WriteArchive extracts a tar archive to the specified path
 // Works universally without requiring tar binary in container
-// Used for PUT /containers/{id}/archive endpoint (buildx)
+// Used for PUT /containers/{id}/archive endpoint (buildx, k3d/kind)
+// Supports both plain tar and gzip-compressed tar archives
 func (s *Server) WriteArchive(ctx context.Context, req *pb.WriteArchiveRequest) (*pb.WriteArchiveResponse, error) {
 	log.Printf("WriteArchive: container=%s path=%s size=%d", req.ContainerId, req.Path, len(req.TarData))
 
-	// Resolve container rootfs path
+	// Resolve destination path - always relative to container rootfs
 	rootfsPath := fmt.Sprintf("/run/container/%s/rootfs", req.ContainerId)
 	destPath := filepath.Join(rootfsPath, req.Path)
+	log.Printf("WriteArchive: Using container path: %s", destPath)
 
 	// Ensure destination exists
 	if err := os.MkdirAll(destPath, 0755); err != nil {
@@ -374,18 +374,27 @@ func (s *Server) WriteArchive(ctx context.Context, req *pb.WriteArchiveRequest) 
 		}, nil
 	}
 
-	// Decompress gzip
-	gzReader, err := gzip.NewReader(bytes.NewReader(req.TarData))
-	if err != nil {
-		return &pb.WriteArchiveResponse{
-			Success: false,
-			Error:   fmt.Sprintf("failed to decompress gzip: %v", err),
-		}, nil
+	// Create a reader for the tar data
+	// Detect if gzip compressed by checking magic bytes (0x1f 0x8b)
+	var tarReader *tar.Reader
+	if len(req.TarData) >= 2 && req.TarData[0] == 0x1f && req.TarData[1] == 0x8b {
+		// Gzip compressed tar
+		log.Printf("Detected gzip-compressed tar archive")
+		gzReader, err := gzip.NewReader(bytes.NewReader(req.TarData))
+		if err != nil {
+			return &pb.WriteArchiveResponse{
+				Success: false,
+				Error:   fmt.Sprintf("failed to decompress gzip: %v", err),
+			}, nil
+		}
+		defer gzReader.Close()
+		tarReader = tar.NewReader(gzReader)
+	} else {
+		// Plain tar (not compressed) - used by Docker CLI and k3d/kind
+		log.Printf("Detected plain tar archive (not compressed)")
+		tarReader = tar.NewReader(bytes.NewReader(req.TarData))
 	}
-	defer gzReader.Close()
-
-	// Extract tar
-	tarReader := tar.NewReader(gzReader)
+	filesExtracted := 0
 	for {
 		header, err := tarReader.Next()
 		if err == io.EOF {
@@ -400,10 +409,13 @@ func (s *Server) WriteArchive(ctx context.Context, req *pb.WriteArchiveRequest) 
 
 		// Security: prevent directory traversal
 		if strings.Contains(header.Name, "..") {
+			log.Printf("WriteArchive: SKIPPING file with '..' in path: %s", header.Name)
 			continue
 		}
 
 		targetPath := filepath.Join(destPath, header.Name)
+		log.Printf("WriteArchive: Processing entry: name=%s type=%d mode=%o size=%d -> targetPath=%s",
+			header.Name, header.Typeflag, header.Mode, header.Size, targetPath)
 
 		switch header.Typeflag {
 		case tar.TypeDir:
@@ -432,7 +444,8 @@ func (s *Server) WriteArchive(ctx context.Context, req *pb.WriteArchiveRequest) 
 				}, nil
 			}
 
-			if _, err := io.Copy(outFile, tarReader); err != nil {
+			bytesWritten, err := io.Copy(outFile, tarReader)
+			if err != nil {
 				outFile.Close()
 				return &pb.WriteArchiveResponse{
 					Success: false,
@@ -440,6 +453,8 @@ func (s *Server) WriteArchive(ctx context.Context, req *pb.WriteArchiveRequest) 
 				}, nil
 			}
 			outFile.Close()
+			filesExtracted++
+			log.Printf("WriteArchive: Wrote file: %s (%d bytes, mode=%o)", targetPath, bytesWritten, header.Mode)
 
 		case tar.TypeSymlink:
 			if err := os.Symlink(header.Linkname, targetPath); err != nil && !os.IsExist(err) {
@@ -451,7 +466,7 @@ func (s *Server) WriteArchive(ctx context.Context, req *pb.WriteArchiveRequest) 
 		}
 	}
 
-	log.Printf("WriteArchive complete")
+	log.Printf("WriteArchive complete: %d files extracted to %s", filesExtracted, destPath)
 	return &pb.WriteArchiveResponse{
 		Success: true,
 	}, nil
@@ -573,5 +588,227 @@ func (s *Server) CreateBindMount(ctx context.Context, req *pb.CreateBindMountReq
 
 	return &pb.CreateBindMountResponse{
 		Success: true,
+	}, nil
+}
+
+// CreateVolumeOverlay creates an OverlayFS mount for a volume
+// This overlays an EXT4 upper layer on top of a VirtioFS lower layer
+// Provides full POSIX compliance (Unix sockets, chmod) for volumes
+// Used for k3d/kind support where volumes need Unix socket support
+//
+// Note: This is called BEFORE container.start(), so the container process (vmexec)
+// doesn't exist yet. We work in the VM's root namespace, where:
+// - VirtioFS devices are available but may not be mounted yet
+// - EXT4 block devices are already mounted by vminitd
+// - /run/container/{id}/rootfs is the prepared rootfs for the container
+func (s *Server) CreateVolumeOverlay(ctx context.Context, req *pb.CreateVolumeOverlayRequest) (*pb.CreateVolumeOverlayResponse, error) {
+	log.Printf("CreateVolumeOverlay: container=%s lower=%s device=%s target=%s tag=%s",
+		req.ContainerId, req.LowerPath, req.UpperDevice, req.Target, req.VirtiofsTag)
+
+	// Use the container's existing writable.ext4 filesystem for overlay upper/work directories
+	// This is already mounted by vminitd at /mnt/vdb (or similar path)
+	// We create subdirectories there for each volume overlay, avoiding the need for extra block devices
+
+	// Find the writable mount path (look for mounted EXT4 on /dev/vdb)
+	writableMountPath, err := findWritableMountPath()
+	if err != nil {
+		errMsg := fmt.Sprintf("failed to find writable mount path: %v", err)
+		log.Printf("ERROR: %s", errMsg)
+		return &pb.CreateVolumeOverlayResponse{
+			Success: false,
+			Error:   errMsg,
+		}, nil
+	}
+	log.Printf("Found writable mount at: %s", writableMountPath)
+
+	// Create a unique subdirectory for this volume overlay
+	// Use volume name from the request (e.g., k3d-k3s-default-images)
+	volumeName := filepath.Base(req.UpperDevice)
+	upperBasePath := filepath.Join(writableMountPath, "volume-overlays", volumeName)
+	log.Printf("Using upper base path: %s (volume: %s)", upperBasePath, volumeName)
+
+	// Create upper and work directories on the EXT4 filesystem
+	upperDir := filepath.Join(upperBasePath, "upper")
+	workDir := filepath.Join(upperBasePath, "work")
+
+	if err := os.MkdirAll(upperDir, 0755); err != nil {
+		errMsg := fmt.Sprintf("failed to create upper directory: %v", err)
+		log.Printf("ERROR: %s", errMsg)
+		return &pb.CreateVolumeOverlayResponse{
+			Success: false,
+			Error:   errMsg,
+		}, nil
+	}
+	if err := os.MkdirAll(workDir, 0755); err != nil {
+		errMsg := fmt.Sprintf("failed to create work directory: %v", err)
+		log.Printf("ERROR: %s", errMsg)
+		return &pb.CreateVolumeOverlayResponse{
+			Success: false,
+			Error:   errMsg,
+		}, nil
+	}
+	log.Printf("✓ Created upper=%s work=%s", upperDir, workDir)
+
+	// Resolve target path to absolute VM path
+	// /run/container/{id}/rootfs is prepared by vminitd before container starts
+	targetAbsolute := fmt.Sprintf("/run/container/%s/rootfs%s", req.ContainerId, req.Target)
+	log.Printf("Resolved target path: %s -> %s", req.Target, targetAbsolute)
+
+	// Ensure target directory exists
+	if err := os.MkdirAll(targetAbsolute, 0755); err != nil {
+		errMsg := fmt.Sprintf("failed to create target directory: %v", err)
+		log.Printf("ERROR: %s", errMsg)
+		return &pb.CreateVolumeOverlayResponse{
+			Success: false,
+			Error:   errMsg,
+		}, nil
+	}
+	log.Printf("✓ Target directory exists: %s", targetAbsolute)
+
+	// Mount VirtioFS at a SEPARATE path (not in container rootfs)
+	// This is called BEFORE container.start(), so vmexec hasn't run yet.
+	// We mount VirtioFS ourselves at /mnt/virtiofs-volumes/{tag} and use that as the lower layer.
+	// This avoids race conditions with vmexec and EBUSY conflicts.
+	virtiofsLowerPath := fmt.Sprintf("/mnt/virtiofs-volumes/%s", req.VirtiofsTag)
+	log.Printf("Mounting VirtioFS at separate path: %s (tag: %s)", virtiofsLowerPath, req.VirtiofsTag)
+
+	// Create the mount point directory
+	if err := os.MkdirAll(virtiofsLowerPath, 0755); err != nil {
+		errMsg := fmt.Sprintf("failed to create VirtioFS mount point: %v", err)
+		log.Printf("ERROR: %s", errMsg)
+		return &pb.CreateVolumeOverlayResponse{
+			Success: false,
+			Error:   errMsg,
+		}, nil
+	}
+
+	// Mount VirtioFS using the tag
+	// VirtioFS uses the tag as the "device" name for the mount
+	if err := unix.Mount(req.VirtiofsTag, virtiofsLowerPath, "virtiofs", 0, ""); err != nil {
+		errMsg := fmt.Sprintf("failed to mount VirtioFS (tag=%s): %v", req.VirtiofsTag, err)
+		log.Printf("ERROR: %s", errMsg)
+		return &pb.CreateVolumeOverlayResponse{
+			Success: false,
+			Error:   errMsg,
+		}, nil
+	}
+	log.Printf("✓ VirtioFS mounted at %s", virtiofsLowerPath)
+
+	// The actual lower path for OverlayFS is within the VirtioFS mount
+	// Original lowerPath: /run/container/{id}/rootfs/mnt/arca-volumes/{hash}/data
+	// We need: /mnt/virtiofs-volumes/{tag}/data (since VirtioFS root is the volume directory)
+	actualLowerPath := filepath.Join(virtiofsLowerPath, "data")
+	log.Printf("Using actual lower path for OverlayFS: %s", actualLowerPath)
+
+	// Verify the lower path exists
+	if _, err := os.Stat(actualLowerPath); err != nil {
+		errMsg := fmt.Sprintf("lower path not accessible after VirtioFS mount: %s: %v", actualLowerPath, err)
+		log.Printf("ERROR: %s", errMsg)
+		return &pb.CreateVolumeOverlayResponse{
+			Success: false,
+			Error:   errMsg,
+		}, nil
+	}
+	log.Printf("✓ Lower path accessible: %s", actualLowerPath)
+
+	// Build OverlayFS options
+	// lowerdir: VirtioFS mount (read-only access to host files)
+	// upperdir: EXT4 mount (writable, provides POSIX compliance)
+	// workdir: EXT4 mount (required by OverlayFS)
+	overlayOpts := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s",
+		actualLowerPath, upperDir, workDir)
+	log.Printf("OverlayFS options: %s", overlayOpts)
+
+	// Create OverlayFS mount in the VM's root namespace
+	// This mount will be visible to the container process when it starts
+	log.Printf("Creating OverlayFS mount at %s", targetAbsolute)
+	if err := unix.Mount("overlay", targetAbsolute, "overlay", 0, overlayOpts); err != nil {
+		errMsg := fmt.Sprintf("failed to mount overlayfs: %v", err)
+		log.Printf("ERROR: %s", errMsg)
+		return &pb.CreateVolumeOverlayResponse{
+			Success: false,
+			Error:   errMsg,
+		}, nil
+	}
+	log.Printf("✓ OverlayFS mounted successfully at %s", targetAbsolute)
+
+	log.Printf("CreateVolumeOverlay complete: %s mounted with OverlayFS", req.Target)
+	return &pb.CreateVolumeOverlayResponse{
+		Success: true,
+	}, nil
+}
+
+// findWritableMountPath finds where the container's writable.ext4 is mounted
+// This is always /dev/vdb, which vminitd mounts at a predictable location
+// Returns the mount path (e.g., /mnt/vdb) or an error if not found
+func findWritableMountPath() (string, error) {
+	// Read /proc/mounts to find where /dev/vdb is mounted
+	data, err := ioutil.ReadFile("/proc/mounts")
+	if err != nil {
+		return "", fmt.Errorf("failed to read /proc/mounts: %w", err)
+	}
+
+	// Parse mount entries looking for /dev/vdb
+	// Format: device mountpoint fstype options dump pass
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+
+		device := fields[0]
+		mountpoint := fields[1]
+
+		// Look for /dev/vdb specifically - this is the container's writable filesystem
+		if device == "/dev/vdb" {
+			log.Printf("Found writable device mount: %s at %s", device, mountpoint)
+			return mountpoint, nil
+		}
+	}
+
+	// /dev/vdb not found - this shouldn't happen as vminitd always mounts it
+	return "", fmt.Errorf("/dev/vdb not found in /proc/mounts - writable filesystem not mounted")
+}
+
+// StatPath checks if a path exists and returns its metadata
+// Used for HEAD requests on archive endpoint
+func (s *Server) StatPath(ctx context.Context, req *pb.StatPathRequest) (*pb.StatPathResponse, error) {
+	log.Printf("StatPath: container=%s path=%s", req.ContainerId, req.Path)
+
+	// Resolve path - always relative to container rootfs
+	rootfsPath := fmt.Sprintf("/run/container/%s/rootfs", req.ContainerId)
+	fullPath := filepath.Join(rootfsPath, req.Path)
+	log.Printf("StatPath: Using container path: %s", fullPath)
+
+	// Get file info
+	info, err := os.Lstat(fullPath)
+	if err != nil {
+		return &pb.StatPathResponse{
+			Success: false,
+			Error:   fmt.Sprintf("path not found: %v", err),
+		}, nil
+	}
+
+	// Create PathStat
+	stat := &pb.PathStat{
+		Name:  info.Name(),
+		Size:  info.Size(),
+		Mode:  uint32(info.Mode()),
+		Mtime: info.ModTime().Format(time.RFC3339),
+	}
+
+	// Handle symlinks
+	if info.Mode()&os.ModeSymlink != 0 {
+		target, err := os.Readlink(fullPath)
+		if err == nil {
+			stat.LinkTarget = target
+		}
+	}
+
+	log.Printf("StatPath complete: %s (mode=%o, size=%d)", fullPath, stat.Mode, stat.Size)
+	return &pb.StatPathResponse{
+		Success: true,
+		Stat:    stat,
 	}, nil
 }

@@ -29,10 +29,19 @@ struct ContainerMount {
     }
 
     func mountToRootfs() throws {
+        App.logToConsole("[vmexec] mountToRootfs: processing \(self.mounts.count) mounts")
         for m in self.mounts {
+            App.logToConsole("[vmexec] mount: type=\(m.type) source=\(m.source) dest=\(m.destination)")
             let osMount = m.toOSMount()
-            try osMount.mount(root: self.rootfs)
+            do {
+                try osMount.mount(root: self.rootfs)
+                App.logToConsole("[vmexec] mount SUCCESS: \(m.destination)")
+            } catch {
+                App.logToConsole("[vmexec] mount FAILED: \(m.destination) error=\(error)")
+                throw error
+            }
         }
+        App.logToConsole("[vmexec] mountToRootfs: all mounts complete")
     }
 
     func configureConsole() throws {

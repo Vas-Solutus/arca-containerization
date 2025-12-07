@@ -44,6 +44,17 @@ service FilesystemService {
     // Works like "mount --bind /source /target" inside the container
     // Used for file bind mounts (VirtioFS only supports directory shares)
     rpc CreateBindMount(CreateBindMountRequest) returns (CreateBindMountResponse);
+
+    // Stat path - check if a path exists and get metadata
+    // Used for HEAD requests on archive endpoint
+    rpc StatPath(StatPathRequest) returns (StatPathResponse);
+
+    // Create volume overlay - create OverlayFS mount for a volume
+    // Overlays an EXT4 upper layer on top of VirtioFS lower layer
+    // This provides full POSIX compliance (Unix sockets, chmod) while maintaining
+    // read access to host files via VirtioFS
+    // Used for k3d/kind support where volumes need Unix socket support
+    rpc CreateVolumeOverlay(CreateVolumeOverlayRequest) returns (CreateVolumeOverlayResponse);
 }
 
 // Request to check service readiness
@@ -190,6 +201,60 @@ message CreateBindMountRequest {
 }
 
 message CreateBindMountResponse {
+    // Success status
+    bool success = 1;
+
+    // Error message if success = false
+    string error = 2;
+}
+
+// Request to stat a path (check existence and get metadata)
+message StatPathRequest {
+    // Container ID (for resolving /run/container/{id}/rootfs path)
+    string container_id = 1;
+
+    // Path to stat (e.g., "/tmp/myfile.txt")
+    string path = 2;
+}
+
+message StatPathResponse {
+    // Success status
+    bool success = 1;
+
+    // Error message if success = false
+    string error = 2;
+
+    // File stat information
+    PathStat stat = 3;
+}
+
+// Request to create an OverlayFS mount for a volume
+// This overlays an EXT4 writable layer on top of a VirtioFS layer
+// Provides full POSIX compliance (Unix sockets, chmod) for volumes
+message CreateVolumeOverlayRequest {
+    // Container ID (for resolving container rootfs path)
+    string container_id = 1;
+
+    // Lower layer path - where VirtioFS should be mounted in guest
+    // e.g., "/mnt/arca-volumes/{hash}/data"
+    // Go will mount the VirtioFS here if not already mounted
+    string lower_path = 2;
+
+    // Upper layer identifier - volume name for creating subdirs
+    // Used to create /mnt/vdb/volume-overlays/{upper_device}/upper and work
+    string upper_device = 3;
+
+    // Target mount path relative to container root
+    // e.g., "/var/lib/rancher/k3s"
+    // Will be resolved to /run/container/{container_id}/rootfs{target}
+    string target = 4;
+
+    // VirtioFS tag for mounting the share if not already mounted
+    // This is the hash of the host source path used by the hypervisor
+    string virtiofs_tag = 5;
+}
+
+message CreateVolumeOverlayResponse {
     // Success status
     bool success = 1;
 

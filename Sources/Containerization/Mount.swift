@@ -133,6 +133,12 @@ public struct Mount: Sendable {
 #if os(macOS)
 
 extension Mount {
+    private static func debugLog(_ message: String) {
+        // Use stderr with flush to ensure output is captured
+        fputs("[Mount.configure] \(message)\n", stderr)
+        fflush(stderr)
+    }
+
     func configure(config: inout VZVirtualMachineConfiguration) throws {
         switch self.runtimeOptions {
         case .virtioblk(let options):
@@ -140,12 +146,15 @@ extension Mount {
             let attachment = VZVirtioBlockDeviceConfiguration(attachment: device)
             config.storageDevices.append(attachment)
         case .virtiofs(_):
+            Self.debugLog("VirtioFS mount: source=\(self.source) destination=\(self.destination)")
             guard FileManager.default.fileExists(atPath: self.source) else {
+                Self.debugLog("ERROR: source does not exist: \(self.source)")
                 throw ContainerizationError(.notFound, message: "directory \(source) does not exist")
             }
 
             let name = try hashMountSource(source: self.source)
             let urlSource = URL(fileURLWithPath: source)
+            Self.debugLog("Creating VirtioFS device: tag=\(name) url=\(urlSource)")
 
             let device = VZVirtioFileSystemDeviceConfiguration(tag: name)
             device.share = VZSingleDirectoryShare(
@@ -155,6 +164,7 @@ extension Mount {
                 )
             )
             config.directorySharingDevices.append(device)
+            Self.debugLog("VirtioFS device added. Total devices: \(config.directorySharingDevices.count)")
         case .any:
             break
         }

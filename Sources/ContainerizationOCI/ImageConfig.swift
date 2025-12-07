@@ -28,6 +28,8 @@ public struct ImageConfig: Codable, Sendable {
         case workingDir = "WorkingDir"
         case labels = "Labels"
         case stopSignal = "StopSignal"
+        case exposedPorts = "ExposedPorts"
+        case volumes = "Volumes"
     }
 
     /// user defines the username or UID which the process in the container should run as.
@@ -51,9 +53,19 @@ public struct ImageConfig: Codable, Sendable {
     /// stopSignal contains the system call signal that will be sent to the container to exit.
     public let stopSignal: String?
 
+    /// exposedPorts is a set of ports to expose from a container running this image.
+    /// Format: {"<port>/<tcp|udp|sctp>": {}}
+    public let exposedPorts: [String: EmptyObject]?
+
+    /// volumes is a set of directories which should be created as data volumes in a container running this image.
+    /// These are defined via VOLUME directives in a Dockerfile.
+    /// Format: {"/path/to/volume": {}}
+    public let volumes: [String: EmptyObject]?
+
     public init(
         user: String? = nil, env: [String]? = nil, entrypoint: [String]? = nil, cmd: [String]? = nil,
-        workingDir: String? = nil, labels: [String: String]? = nil, stopSignal: String? = nil
+        workingDir: String? = nil, labels: [String: String]? = nil, stopSignal: String? = nil,
+        exposedPorts: [String: EmptyObject]? = nil, volumes: [String: EmptyObject]? = nil
     ) {
         self.user = user
         self.env = env
@@ -62,7 +74,15 @@ public struct ImageConfig: Codable, Sendable {
         self.workingDir = workingDir
         self.labels = labels
         self.stopSignal = stopSignal
+        self.exposedPorts = exposedPorts
+        self.volumes = volumes
     }
+}
+
+/// Empty object type used for Docker/OCI config map values.
+/// Docker uses empty objects {} as values in maps like Volumes and ExposedPorts.
+public struct EmptyObject: Codable, Sendable {
+    public init() {}
 }
 
 /// RootFS describes a layer content addresses

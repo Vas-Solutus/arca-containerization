@@ -861,6 +861,268 @@ func (x *CreateBindMountResponse) GetError() string {
 	return ""
 }
 
+// Request to stat a path (check existence and get metadata)
+type StatPathRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Container ID (for resolving /run/container/{id}/rootfs path)
+	ContainerId string `protobuf:"bytes,1,opt,name=container_id,json=containerId,proto3" json:"container_id,omitempty"`
+	// Path to stat (e.g., "/tmp/myfile.txt")
+	Path          string `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StatPathRequest) Reset() {
+	*x = StatPathRequest{}
+	mi := &file_filesystem_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StatPathRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StatPathRequest) ProtoMessage() {}
+
+func (x *StatPathRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_filesystem_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StatPathRequest.ProtoReflect.Descriptor instead.
+func (*StatPathRequest) Descriptor() ([]byte, []int) {
+	return file_filesystem_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *StatPathRequest) GetContainerId() string {
+	if x != nil {
+		return x.ContainerId
+	}
+	return ""
+}
+
+func (x *StatPathRequest) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+type StatPathResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Success status
+	Success bool `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	// Error message if success = false
+	Error string `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	// File stat information
+	Stat          *PathStat `protobuf:"bytes,3,opt,name=stat,proto3" json:"stat,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StatPathResponse) Reset() {
+	*x = StatPathResponse{}
+	mi := &file_filesystem_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StatPathResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StatPathResponse) ProtoMessage() {}
+
+func (x *StatPathResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_filesystem_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StatPathResponse.ProtoReflect.Descriptor instead.
+func (*StatPathResponse) Descriptor() ([]byte, []int) {
+	return file_filesystem_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *StatPathResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *StatPathResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+func (x *StatPathResponse) GetStat() *PathStat {
+	if x != nil {
+		return x.Stat
+	}
+	return nil
+}
+
+// Request to create an OverlayFS mount for a volume
+// This overlays an EXT4 writable layer on top of a VirtioFS layer
+// Provides full POSIX compliance (Unix sockets, chmod) for volumes
+type CreateVolumeOverlayRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Container ID (for resolving container rootfs path)
+	ContainerId string `protobuf:"bytes,1,opt,name=container_id,json=containerId,proto3" json:"container_id,omitempty"`
+	// Lower layer path - where VirtioFS should be mounted in guest
+	// e.g., "/mnt/arca-volumes/{hash}/data"
+	// Go will mount the VirtioFS here if not already mounted
+	LowerPath string `protobuf:"bytes,2,opt,name=lower_path,json=lowerPath,proto3" json:"lower_path,omitempty"`
+	// Upper layer identifier - volume name for creating subdirs
+	// Used to create /mnt/vdb/volume-overlays/{upper_device}/upper and work
+	UpperDevice string `protobuf:"bytes,3,opt,name=upper_device,json=upperDevice,proto3" json:"upper_device,omitempty"`
+	// Target mount path relative to container root
+	// e.g., "/var/lib/rancher/k3s"
+	// Will be resolved to /run/container/{container_id}/rootfs{target}
+	Target string `protobuf:"bytes,4,opt,name=target,proto3" json:"target,omitempty"`
+	// VirtioFS tag for mounting the share if not already mounted
+	// This is the hash of the host source path used by the hypervisor
+	VirtiofsTag   string `protobuf:"bytes,5,opt,name=virtiofs_tag,json=virtiofsTag,proto3" json:"virtiofs_tag,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateVolumeOverlayRequest) Reset() {
+	*x = CreateVolumeOverlayRequest{}
+	mi := &file_filesystem_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateVolumeOverlayRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateVolumeOverlayRequest) ProtoMessage() {}
+
+func (x *CreateVolumeOverlayRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_filesystem_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateVolumeOverlayRequest.ProtoReflect.Descriptor instead.
+func (*CreateVolumeOverlayRequest) Descriptor() ([]byte, []int) {
+	return file_filesystem_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *CreateVolumeOverlayRequest) GetContainerId() string {
+	if x != nil {
+		return x.ContainerId
+	}
+	return ""
+}
+
+func (x *CreateVolumeOverlayRequest) GetLowerPath() string {
+	if x != nil {
+		return x.LowerPath
+	}
+	return ""
+}
+
+func (x *CreateVolumeOverlayRequest) GetUpperDevice() string {
+	if x != nil {
+		return x.UpperDevice
+	}
+	return ""
+}
+
+func (x *CreateVolumeOverlayRequest) GetTarget() string {
+	if x != nil {
+		return x.Target
+	}
+	return ""
+}
+
+func (x *CreateVolumeOverlayRequest) GetVirtiofsTag() string {
+	if x != nil {
+		return x.VirtiofsTag
+	}
+	return ""
+}
+
+type CreateVolumeOverlayResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Success status
+	Success bool `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	// Error message if success = false
+	Error         string `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateVolumeOverlayResponse) Reset() {
+	*x = CreateVolumeOverlayResponse{}
+	mi := &file_filesystem_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateVolumeOverlayResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateVolumeOverlayResponse) ProtoMessage() {}
+
+func (x *CreateVolumeOverlayResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_filesystem_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateVolumeOverlayResponse.ProtoReflect.Descriptor instead.
+func (*CreateVolumeOverlayResponse) Descriptor() ([]byte, []int) {
+	return file_filesystem_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *CreateVolumeOverlayResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *CreateVolumeOverlayResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 var File_filesystem_proto protoreflect.FileDescriptor
 
 const file_filesystem_proto_rawDesc = "" +
@@ -915,14 +1177,33 @@ const file_filesystem_proto_rawDesc = "" +
 	"\tread_only\x18\x04 \x01(\bR\breadOnly\"I\n" +
 	"\x17CreateBindMountResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error2\xeb\x04\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"H\n" +
+	"\x0fStatPathRequest\x12!\n" +
+	"\fcontainer_id\x18\x01 \x01(\tR\vcontainerId\x12\x12\n" +
+	"\x04path\x18\x02 \x01(\tR\x04path\"t\n" +
+	"\x10StatPathResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\x120\n" +
+	"\x04stat\x18\x03 \x01(\v2\x1c.arca.filesystem.v1.PathStatR\x04stat\"\xbc\x01\n" +
+	"\x1aCreateVolumeOverlayRequest\x12!\n" +
+	"\fcontainer_id\x18\x01 \x01(\tR\vcontainerId\x12\x1d\n" +
+	"\n" +
+	"lower_path\x18\x02 \x01(\tR\tlowerPath\x12!\n" +
+	"\fupper_device\x18\x03 \x01(\tR\vupperDevice\x12\x16\n" +
+	"\x06target\x18\x04 \x01(\tR\x06target\x12!\n" +
+	"\fvirtiofs_tag\x18\x05 \x01(\tR\vvirtiofsTag\"M\n" +
+	"\x1bCreateVolumeOverlayResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error2\xba\x06\n" +
 	"\x11FilesystemService\x12L\n" +
 	"\x05Ready\x12 .arca.filesystem.v1.ReadyRequest\x1a!.arca.filesystem.v1.ReadyResponse\x12g\n" +
 	"\x0eSyncFilesystem\x12).arca.filesystem.v1.SyncFilesystemRequest\x1a*.arca.filesystem.v1.SyncFilesystemResponse\x12p\n" +
 	"\x11EnumerateUpperdir\x12,.arca.filesystem.v1.EnumerateUpperdirRequest\x1a-.arca.filesystem.v1.EnumerateUpperdirResponse\x12^\n" +
 	"\vReadArchive\x12&.arca.filesystem.v1.ReadArchiveRequest\x1a'.arca.filesystem.v1.ReadArchiveResponse\x12a\n" +
 	"\fWriteArchive\x12'.arca.filesystem.v1.WriteArchiveRequest\x1a(.arca.filesystem.v1.WriteArchiveResponse\x12j\n" +
-	"\x0fCreateBindMount\x12*.arca.filesystem.v1.CreateBindMountRequest\x1a+.arca.filesystem.v1.CreateBindMountResponseB7Z5github.com/vas-solutus/arca-services/proto/filesystemb\x06proto3"
+	"\x0fCreateBindMount\x12*.arca.filesystem.v1.CreateBindMountRequest\x1a+.arca.filesystem.v1.CreateBindMountResponse\x12U\n" +
+	"\bStatPath\x12#.arca.filesystem.v1.StatPathRequest\x1a$.arca.filesystem.v1.StatPathResponse\x12v\n" +
+	"\x13CreateVolumeOverlay\x12..arca.filesystem.v1.CreateVolumeOverlayRequest\x1a/.arca.filesystem.v1.CreateVolumeOverlayResponseB7Z5github.com/vas-solutus/arca-services/proto/filesystemb\x06proto3"
 
 var (
 	file_filesystem_proto_rawDescOnce sync.Once
@@ -936,43 +1217,52 @@ func file_filesystem_proto_rawDescGZIP() []byte {
 	return file_filesystem_proto_rawDescData
 }
 
-var file_filesystem_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
+var file_filesystem_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
 var file_filesystem_proto_goTypes = []any{
-	(*ReadyRequest)(nil),              // 0: arca.filesystem.v1.ReadyRequest
-	(*ReadyResponse)(nil),             // 1: arca.filesystem.v1.ReadyResponse
-	(*SyncFilesystemRequest)(nil),     // 2: arca.filesystem.v1.SyncFilesystemRequest
-	(*SyncFilesystemResponse)(nil),    // 3: arca.filesystem.v1.SyncFilesystemResponse
-	(*EnumerateUpperdirRequest)(nil),  // 4: arca.filesystem.v1.EnumerateUpperdirRequest
-	(*EnumerateUpperdirResponse)(nil), // 5: arca.filesystem.v1.EnumerateUpperdirResponse
-	(*UpperdirEntry)(nil),             // 6: arca.filesystem.v1.UpperdirEntry
-	(*ReadArchiveRequest)(nil),        // 7: arca.filesystem.v1.ReadArchiveRequest
-	(*ReadArchiveResponse)(nil),       // 8: arca.filesystem.v1.ReadArchiveResponse
-	(*PathStat)(nil),                  // 9: arca.filesystem.v1.PathStat
-	(*WriteArchiveRequest)(nil),       // 10: arca.filesystem.v1.WriteArchiveRequest
-	(*WriteArchiveResponse)(nil),      // 11: arca.filesystem.v1.WriteArchiveResponse
-	(*CreateBindMountRequest)(nil),    // 12: arca.filesystem.v1.CreateBindMountRequest
-	(*CreateBindMountResponse)(nil),   // 13: arca.filesystem.v1.CreateBindMountResponse
+	(*ReadyRequest)(nil),                // 0: arca.filesystem.v1.ReadyRequest
+	(*ReadyResponse)(nil),               // 1: arca.filesystem.v1.ReadyResponse
+	(*SyncFilesystemRequest)(nil),       // 2: arca.filesystem.v1.SyncFilesystemRequest
+	(*SyncFilesystemResponse)(nil),      // 3: arca.filesystem.v1.SyncFilesystemResponse
+	(*EnumerateUpperdirRequest)(nil),    // 4: arca.filesystem.v1.EnumerateUpperdirRequest
+	(*EnumerateUpperdirResponse)(nil),   // 5: arca.filesystem.v1.EnumerateUpperdirResponse
+	(*UpperdirEntry)(nil),               // 6: arca.filesystem.v1.UpperdirEntry
+	(*ReadArchiveRequest)(nil),          // 7: arca.filesystem.v1.ReadArchiveRequest
+	(*ReadArchiveResponse)(nil),         // 8: arca.filesystem.v1.ReadArchiveResponse
+	(*PathStat)(nil),                    // 9: arca.filesystem.v1.PathStat
+	(*WriteArchiveRequest)(nil),         // 10: arca.filesystem.v1.WriteArchiveRequest
+	(*WriteArchiveResponse)(nil),        // 11: arca.filesystem.v1.WriteArchiveResponse
+	(*CreateBindMountRequest)(nil),      // 12: arca.filesystem.v1.CreateBindMountRequest
+	(*CreateBindMountResponse)(nil),     // 13: arca.filesystem.v1.CreateBindMountResponse
+	(*StatPathRequest)(nil),             // 14: arca.filesystem.v1.StatPathRequest
+	(*StatPathResponse)(nil),            // 15: arca.filesystem.v1.StatPathResponse
+	(*CreateVolumeOverlayRequest)(nil),  // 16: arca.filesystem.v1.CreateVolumeOverlayRequest
+	(*CreateVolumeOverlayResponse)(nil), // 17: arca.filesystem.v1.CreateVolumeOverlayResponse
 }
 var file_filesystem_proto_depIdxs = []int32{
 	6,  // 0: arca.filesystem.v1.EnumerateUpperdirResponse.entries:type_name -> arca.filesystem.v1.UpperdirEntry
 	9,  // 1: arca.filesystem.v1.ReadArchiveResponse.stat:type_name -> arca.filesystem.v1.PathStat
-	0,  // 2: arca.filesystem.v1.FilesystemService.Ready:input_type -> arca.filesystem.v1.ReadyRequest
-	2,  // 3: arca.filesystem.v1.FilesystemService.SyncFilesystem:input_type -> arca.filesystem.v1.SyncFilesystemRequest
-	4,  // 4: arca.filesystem.v1.FilesystemService.EnumerateUpperdir:input_type -> arca.filesystem.v1.EnumerateUpperdirRequest
-	7,  // 5: arca.filesystem.v1.FilesystemService.ReadArchive:input_type -> arca.filesystem.v1.ReadArchiveRequest
-	10, // 6: arca.filesystem.v1.FilesystemService.WriteArchive:input_type -> arca.filesystem.v1.WriteArchiveRequest
-	12, // 7: arca.filesystem.v1.FilesystemService.CreateBindMount:input_type -> arca.filesystem.v1.CreateBindMountRequest
-	1,  // 8: arca.filesystem.v1.FilesystemService.Ready:output_type -> arca.filesystem.v1.ReadyResponse
-	3,  // 9: arca.filesystem.v1.FilesystemService.SyncFilesystem:output_type -> arca.filesystem.v1.SyncFilesystemResponse
-	5,  // 10: arca.filesystem.v1.FilesystemService.EnumerateUpperdir:output_type -> arca.filesystem.v1.EnumerateUpperdirResponse
-	8,  // 11: arca.filesystem.v1.FilesystemService.ReadArchive:output_type -> arca.filesystem.v1.ReadArchiveResponse
-	11, // 12: arca.filesystem.v1.FilesystemService.WriteArchive:output_type -> arca.filesystem.v1.WriteArchiveResponse
-	13, // 13: arca.filesystem.v1.FilesystemService.CreateBindMount:output_type -> arca.filesystem.v1.CreateBindMountResponse
-	8,  // [8:14] is the sub-list for method output_type
-	2,  // [2:8] is the sub-list for method input_type
-	2,  // [2:2] is the sub-list for extension type_name
-	2,  // [2:2] is the sub-list for extension extendee
-	0,  // [0:2] is the sub-list for field type_name
+	9,  // 2: arca.filesystem.v1.StatPathResponse.stat:type_name -> arca.filesystem.v1.PathStat
+	0,  // 3: arca.filesystem.v1.FilesystemService.Ready:input_type -> arca.filesystem.v1.ReadyRequest
+	2,  // 4: arca.filesystem.v1.FilesystemService.SyncFilesystem:input_type -> arca.filesystem.v1.SyncFilesystemRequest
+	4,  // 5: arca.filesystem.v1.FilesystemService.EnumerateUpperdir:input_type -> arca.filesystem.v1.EnumerateUpperdirRequest
+	7,  // 6: arca.filesystem.v1.FilesystemService.ReadArchive:input_type -> arca.filesystem.v1.ReadArchiveRequest
+	10, // 7: arca.filesystem.v1.FilesystemService.WriteArchive:input_type -> arca.filesystem.v1.WriteArchiveRequest
+	12, // 8: arca.filesystem.v1.FilesystemService.CreateBindMount:input_type -> arca.filesystem.v1.CreateBindMountRequest
+	14, // 9: arca.filesystem.v1.FilesystemService.StatPath:input_type -> arca.filesystem.v1.StatPathRequest
+	16, // 10: arca.filesystem.v1.FilesystemService.CreateVolumeOverlay:input_type -> arca.filesystem.v1.CreateVolumeOverlayRequest
+	1,  // 11: arca.filesystem.v1.FilesystemService.Ready:output_type -> arca.filesystem.v1.ReadyResponse
+	3,  // 12: arca.filesystem.v1.FilesystemService.SyncFilesystem:output_type -> arca.filesystem.v1.SyncFilesystemResponse
+	5,  // 13: arca.filesystem.v1.FilesystemService.EnumerateUpperdir:output_type -> arca.filesystem.v1.EnumerateUpperdirResponse
+	8,  // 14: arca.filesystem.v1.FilesystemService.ReadArchive:output_type -> arca.filesystem.v1.ReadArchiveResponse
+	11, // 15: arca.filesystem.v1.FilesystemService.WriteArchive:output_type -> arca.filesystem.v1.WriteArchiveResponse
+	13, // 16: arca.filesystem.v1.FilesystemService.CreateBindMount:output_type -> arca.filesystem.v1.CreateBindMountResponse
+	15, // 17: arca.filesystem.v1.FilesystemService.StatPath:output_type -> arca.filesystem.v1.StatPathResponse
+	17, // 18: arca.filesystem.v1.FilesystemService.CreateVolumeOverlay:output_type -> arca.filesystem.v1.CreateVolumeOverlayResponse
+	11, // [11:19] is the sub-list for method output_type
+	3,  // [3:11] is the sub-list for method input_type
+	3,  // [3:3] is the sub-list for extension type_name
+	3,  // [3:3] is the sub-list for extension extendee
+	0,  // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_filesystem_proto_init() }
@@ -986,7 +1276,7 @@ func file_filesystem_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_filesystem_proto_rawDesc), len(file_filesystem_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   14,
+			NumMessages:   18,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

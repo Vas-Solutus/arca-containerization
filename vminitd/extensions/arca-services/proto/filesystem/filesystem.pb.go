@@ -1123,6 +1123,128 @@ func (x *CreateVolumeOverlayResponse) GetError() string {
 	return ""
 }
 
+// Request to create a direct EXT4 bind mount for a volume
+// This creates a directory on the writable EXT4 filesystem and bind mounts it
+// to the container target path. No OverlayFS involved - allows nested overlays.
+type CreateDirectMountRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Container ID (for resolving container rootfs path)
+	ContainerId string `protobuf:"bytes,1,opt,name=container_id,json=containerId,proto3" json:"container_id,omitempty"`
+	// Volume name - used to create /mnt/writable/volumes/{volume_name}
+	VolumeName string `protobuf:"bytes,2,opt,name=volume_name,json=volumeName,proto3" json:"volume_name,omitempty"`
+	// Target mount path relative to container root
+	// e.g., "/var/lib/rancher/k3s"
+	// Will be resolved to /run/container/{container_id}/rootfs{target}
+	Target        string `protobuf:"bytes,3,opt,name=target,proto3" json:"target,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateDirectMountRequest) Reset() {
+	*x = CreateDirectMountRequest{}
+	mi := &file_filesystem_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateDirectMountRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateDirectMountRequest) ProtoMessage() {}
+
+func (x *CreateDirectMountRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_filesystem_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateDirectMountRequest.ProtoReflect.Descriptor instead.
+func (*CreateDirectMountRequest) Descriptor() ([]byte, []int) {
+	return file_filesystem_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *CreateDirectMountRequest) GetContainerId() string {
+	if x != nil {
+		return x.ContainerId
+	}
+	return ""
+}
+
+func (x *CreateDirectMountRequest) GetVolumeName() string {
+	if x != nil {
+		return x.VolumeName
+	}
+	return ""
+}
+
+func (x *CreateDirectMountRequest) GetTarget() string {
+	if x != nil {
+		return x.Target
+	}
+	return ""
+}
+
+type CreateDirectMountResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Success status
+	Success bool `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	// Error message if success = false
+	Error         string `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateDirectMountResponse) Reset() {
+	*x = CreateDirectMountResponse{}
+	mi := &file_filesystem_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateDirectMountResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateDirectMountResponse) ProtoMessage() {}
+
+func (x *CreateDirectMountResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_filesystem_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateDirectMountResponse.ProtoReflect.Descriptor instead.
+func (*CreateDirectMountResponse) Descriptor() ([]byte, []int) {
+	return file_filesystem_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *CreateDirectMountResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *CreateDirectMountResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 var File_filesystem_proto protoreflect.FileDescriptor
 
 const file_filesystem_proto_rawDesc = "" +
@@ -1194,7 +1316,15 @@ const file_filesystem_proto_rawDesc = "" +
 	"\fvirtiofs_tag\x18\x05 \x01(\tR\vvirtiofsTag\"M\n" +
 	"\x1bCreateVolumeOverlayResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error2\xba\x06\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"v\n" +
+	"\x18CreateDirectMountRequest\x12!\n" +
+	"\fcontainer_id\x18\x01 \x01(\tR\vcontainerId\x12\x1f\n" +
+	"\vvolume_name\x18\x02 \x01(\tR\n" +
+	"volumeName\x12\x16\n" +
+	"\x06target\x18\x03 \x01(\tR\x06target\"K\n" +
+	"\x19CreateDirectMountResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error2\xac\a\n" +
 	"\x11FilesystemService\x12L\n" +
 	"\x05Ready\x12 .arca.filesystem.v1.ReadyRequest\x1a!.arca.filesystem.v1.ReadyResponse\x12g\n" +
 	"\x0eSyncFilesystem\x12).arca.filesystem.v1.SyncFilesystemRequest\x1a*.arca.filesystem.v1.SyncFilesystemResponse\x12p\n" +
@@ -1203,7 +1333,8 @@ const file_filesystem_proto_rawDesc = "" +
 	"\fWriteArchive\x12'.arca.filesystem.v1.WriteArchiveRequest\x1a(.arca.filesystem.v1.WriteArchiveResponse\x12j\n" +
 	"\x0fCreateBindMount\x12*.arca.filesystem.v1.CreateBindMountRequest\x1a+.arca.filesystem.v1.CreateBindMountResponse\x12U\n" +
 	"\bStatPath\x12#.arca.filesystem.v1.StatPathRequest\x1a$.arca.filesystem.v1.StatPathResponse\x12v\n" +
-	"\x13CreateVolumeOverlay\x12..arca.filesystem.v1.CreateVolumeOverlayRequest\x1a/.arca.filesystem.v1.CreateVolumeOverlayResponseB7Z5github.com/vas-solutus/arca-services/proto/filesystemb\x06proto3"
+	"\x13CreateVolumeOverlay\x12..arca.filesystem.v1.CreateVolumeOverlayRequest\x1a/.arca.filesystem.v1.CreateVolumeOverlayResponse\x12p\n" +
+	"\x11CreateDirectMount\x12,.arca.filesystem.v1.CreateDirectMountRequest\x1a-.arca.filesystem.v1.CreateDirectMountResponseB7Z5github.com/vas-solutus/arca-services/proto/filesystemb\x06proto3"
 
 var (
 	file_filesystem_proto_rawDescOnce sync.Once
@@ -1217,7 +1348,7 @@ func file_filesystem_proto_rawDescGZIP() []byte {
 	return file_filesystem_proto_rawDescData
 }
 
-var file_filesystem_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
+var file_filesystem_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
 var file_filesystem_proto_goTypes = []any{
 	(*ReadyRequest)(nil),                // 0: arca.filesystem.v1.ReadyRequest
 	(*ReadyResponse)(nil),               // 1: arca.filesystem.v1.ReadyResponse
@@ -1237,6 +1368,8 @@ var file_filesystem_proto_goTypes = []any{
 	(*StatPathResponse)(nil),            // 15: arca.filesystem.v1.StatPathResponse
 	(*CreateVolumeOverlayRequest)(nil),  // 16: arca.filesystem.v1.CreateVolumeOverlayRequest
 	(*CreateVolumeOverlayResponse)(nil), // 17: arca.filesystem.v1.CreateVolumeOverlayResponse
+	(*CreateDirectMountRequest)(nil),    // 18: arca.filesystem.v1.CreateDirectMountRequest
+	(*CreateDirectMountResponse)(nil),   // 19: arca.filesystem.v1.CreateDirectMountResponse
 }
 var file_filesystem_proto_depIdxs = []int32{
 	6,  // 0: arca.filesystem.v1.EnumerateUpperdirResponse.entries:type_name -> arca.filesystem.v1.UpperdirEntry
@@ -1250,16 +1383,18 @@ var file_filesystem_proto_depIdxs = []int32{
 	12, // 8: arca.filesystem.v1.FilesystemService.CreateBindMount:input_type -> arca.filesystem.v1.CreateBindMountRequest
 	14, // 9: arca.filesystem.v1.FilesystemService.StatPath:input_type -> arca.filesystem.v1.StatPathRequest
 	16, // 10: arca.filesystem.v1.FilesystemService.CreateVolumeOverlay:input_type -> arca.filesystem.v1.CreateVolumeOverlayRequest
-	1,  // 11: arca.filesystem.v1.FilesystemService.Ready:output_type -> arca.filesystem.v1.ReadyResponse
-	3,  // 12: arca.filesystem.v1.FilesystemService.SyncFilesystem:output_type -> arca.filesystem.v1.SyncFilesystemResponse
-	5,  // 13: arca.filesystem.v1.FilesystemService.EnumerateUpperdir:output_type -> arca.filesystem.v1.EnumerateUpperdirResponse
-	8,  // 14: arca.filesystem.v1.FilesystemService.ReadArchive:output_type -> arca.filesystem.v1.ReadArchiveResponse
-	11, // 15: arca.filesystem.v1.FilesystemService.WriteArchive:output_type -> arca.filesystem.v1.WriteArchiveResponse
-	13, // 16: arca.filesystem.v1.FilesystemService.CreateBindMount:output_type -> arca.filesystem.v1.CreateBindMountResponse
-	15, // 17: arca.filesystem.v1.FilesystemService.StatPath:output_type -> arca.filesystem.v1.StatPathResponse
-	17, // 18: arca.filesystem.v1.FilesystemService.CreateVolumeOverlay:output_type -> arca.filesystem.v1.CreateVolumeOverlayResponse
-	11, // [11:19] is the sub-list for method output_type
-	3,  // [3:11] is the sub-list for method input_type
+	18, // 11: arca.filesystem.v1.FilesystemService.CreateDirectMount:input_type -> arca.filesystem.v1.CreateDirectMountRequest
+	1,  // 12: arca.filesystem.v1.FilesystemService.Ready:output_type -> arca.filesystem.v1.ReadyResponse
+	3,  // 13: arca.filesystem.v1.FilesystemService.SyncFilesystem:output_type -> arca.filesystem.v1.SyncFilesystemResponse
+	5,  // 14: arca.filesystem.v1.FilesystemService.EnumerateUpperdir:output_type -> arca.filesystem.v1.EnumerateUpperdirResponse
+	8,  // 15: arca.filesystem.v1.FilesystemService.ReadArchive:output_type -> arca.filesystem.v1.ReadArchiveResponse
+	11, // 16: arca.filesystem.v1.FilesystemService.WriteArchive:output_type -> arca.filesystem.v1.WriteArchiveResponse
+	13, // 17: arca.filesystem.v1.FilesystemService.CreateBindMount:output_type -> arca.filesystem.v1.CreateBindMountResponse
+	15, // 18: arca.filesystem.v1.FilesystemService.StatPath:output_type -> arca.filesystem.v1.StatPathResponse
+	17, // 19: arca.filesystem.v1.FilesystemService.CreateVolumeOverlay:output_type -> arca.filesystem.v1.CreateVolumeOverlayResponse
+	19, // 20: arca.filesystem.v1.FilesystemService.CreateDirectMount:output_type -> arca.filesystem.v1.CreateDirectMountResponse
+	12, // [12:21] is the sub-list for method output_type
+	3,  // [3:12] is the sub-list for method input_type
 	3,  // [3:3] is the sub-list for extension type_name
 	3,  // [3:3] is the sub-list for extension extendee
 	0,  // [0:3] is the sub-list for field type_name
@@ -1276,7 +1411,7 @@ func file_filesystem_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_filesystem_proto_rawDesc), len(file_filesystem_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   18,
+			NumMessages:   20,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

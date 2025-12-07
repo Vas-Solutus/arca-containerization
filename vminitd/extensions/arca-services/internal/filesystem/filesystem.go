@@ -738,6 +738,72 @@ func (s *Server) CreateVolumeOverlay(ctx context.Context, req *pb.CreateVolumeOv
 	}, nil
 }
 
+// CreateDirectMount creates a direct EXT4 bind mount for a named volume
+// This avoids OverlayFS entirely, allowing containerd to create its own overlays
+// Used for named volumes (local driver) that don't need host file access
+func (s *Server) CreateDirectMount(ctx context.Context, req *pb.CreateDirectMountRequest) (*pb.CreateDirectMountResponse, error) {
+	log.Printf("CreateDirectMount: container=%s volume=%s target=%s",
+		req.ContainerId, req.VolumeName, req.Target)
+
+	// Find the writable mount path (EXT4 on /dev/vdb)
+	writableMountPath, err := findWritableMountPath()
+	if err != nil {
+		errMsg := fmt.Sprintf("failed to find writable mount path: %v", err)
+		log.Printf("ERROR: %s", errMsg)
+		return &pb.CreateDirectMountResponse{
+			Success: false,
+			Error:   errMsg,
+		}, nil
+	}
+	log.Printf("Found writable mount at: %s", writableMountPath)
+
+	// Create volume directory on EXT4: /mnt/writable/volumes/{volume_name}
+	volumeDir := filepath.Join(writableMountPath, "volumes", req.VolumeName)
+	log.Printf("Creating volume directory: %s", volumeDir)
+
+	if err := os.MkdirAll(volumeDir, 0755); err != nil {
+		errMsg := fmt.Sprintf("failed to create volume directory: %v", err)
+		log.Printf("ERROR: %s", errMsg)
+		return &pb.CreateDirectMountResponse{
+			Success: false,
+			Error:   errMsg,
+		}, nil
+	}
+	log.Printf("✓ Volume directory created: %s", volumeDir)
+
+	// Resolve target path to absolute VM path
+	targetAbsolute := fmt.Sprintf("/run/container/%s/rootfs%s", req.ContainerId, req.Target)
+	log.Printf("Resolved target path: %s -> %s", req.Target, targetAbsolute)
+
+	// Ensure target directory exists
+	if err := os.MkdirAll(targetAbsolute, 0755); err != nil {
+		errMsg := fmt.Sprintf("failed to create target directory: %v", err)
+		log.Printf("ERROR: %s", errMsg)
+		return &pb.CreateDirectMountResponse{
+			Success: false,
+			Error:   errMsg,
+		}, nil
+	}
+	log.Printf("✓ Target directory exists: %s", targetAbsolute)
+
+	// Bind mount the EXT4 volume directory to the container target
+	log.Printf("Creating bind mount: %s -> %s", volumeDir, targetAbsolute)
+	if err := unix.Mount(volumeDir, targetAbsolute, "", unix.MS_BIND, ""); err != nil {
+		errMsg := fmt.Sprintf("failed to bind mount: %v", err)
+		log.Printf("ERROR: %s", errMsg)
+		return &pb.CreateDirectMountResponse{
+			Success: false,
+			Error:   errMsg,
+		}, nil
+	}
+	log.Printf("✓ Bind mount created successfully: %s -> %s", volumeDir, targetAbsolute)
+
+	log.Printf("CreateDirectMount complete: %s mounted from EXT4", req.Target)
+	return &pb.CreateDirectMountResponse{
+		Success: true,
+	}, nil
+}
+
 // findWritableMountPath finds where the container's writable.ext4 is mounted
 // This is always /dev/vdb, which vminitd mounts at a predictable location
 // Returns the mount path (e.g., /mnt/vdb) or an error if not found

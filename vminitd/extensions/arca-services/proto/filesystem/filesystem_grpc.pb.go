@@ -36,6 +36,7 @@ const (
 	FilesystemService_CreateBindMount_FullMethodName     = "/arca.filesystem.v1.FilesystemService/CreateBindMount"
 	FilesystemService_StatPath_FullMethodName            = "/arca.filesystem.v1.FilesystemService/StatPath"
 	FilesystemService_CreateVolumeOverlay_FullMethodName = "/arca.filesystem.v1.FilesystemService/CreateVolumeOverlay"
+	FilesystemService_CreateDirectMount_FullMethodName   = "/arca.filesystem.v1.FilesystemService/CreateDirectMount"
 )
 
 // FilesystemServiceClient is the client API for FilesystemService service.
@@ -75,8 +76,13 @@ type FilesystemServiceClient interface {
 	// Overlays an EXT4 upper layer on top of VirtioFS lower layer
 	// This provides full POSIX compliance (Unix sockets, chmod) while maintaining
 	// read access to host files via VirtioFS
-	// Used for k3d/kind support where volumes need Unix socket support
+	// Used for bind mounts that need both host file access AND POSIX compliance
 	CreateVolumeOverlay(ctx context.Context, in *CreateVolumeOverlayRequest, opts ...grpc.CallOption) (*CreateVolumeOverlayResponse, error)
+	// Create direct volume mount - bind mount EXT4 directory to container path
+	// Creates a directory on the writable EXT4 filesystem and bind mounts it
+	// Provides full POSIX compliance without OverlayFS (allows nested overlays)
+	// Used for named volumes (local driver) that don't need host file access
+	CreateDirectMount(ctx context.Context, in *CreateDirectMountRequest, opts ...grpc.CallOption) (*CreateDirectMountResponse, error)
 }
 
 type filesystemServiceClient struct {
@@ -167,6 +173,16 @@ func (c *filesystemServiceClient) CreateVolumeOverlay(ctx context.Context, in *C
 	return out, nil
 }
 
+func (c *filesystemServiceClient) CreateDirectMount(ctx context.Context, in *CreateDirectMountRequest, opts ...grpc.CallOption) (*CreateDirectMountResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateDirectMountResponse)
+	err := c.cc.Invoke(ctx, FilesystemService_CreateDirectMount_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // FilesystemServiceServer is the server API for FilesystemService service.
 // All implementations must embed UnimplementedFilesystemServiceServer
 // for forward compatibility.
@@ -204,8 +220,13 @@ type FilesystemServiceServer interface {
 	// Overlays an EXT4 upper layer on top of VirtioFS lower layer
 	// This provides full POSIX compliance (Unix sockets, chmod) while maintaining
 	// read access to host files via VirtioFS
-	// Used for k3d/kind support where volumes need Unix socket support
+	// Used for bind mounts that need both host file access AND POSIX compliance
 	CreateVolumeOverlay(context.Context, *CreateVolumeOverlayRequest) (*CreateVolumeOverlayResponse, error)
+	// Create direct volume mount - bind mount EXT4 directory to container path
+	// Creates a directory on the writable EXT4 filesystem and bind mounts it
+	// Provides full POSIX compliance without OverlayFS (allows nested overlays)
+	// Used for named volumes (local driver) that don't need host file access
+	CreateDirectMount(context.Context, *CreateDirectMountRequest) (*CreateDirectMountResponse, error)
 	mustEmbedUnimplementedFilesystemServiceServer()
 }
 
@@ -239,6 +260,9 @@ func (UnimplementedFilesystemServiceServer) StatPath(context.Context, *StatPathR
 }
 func (UnimplementedFilesystemServiceServer) CreateVolumeOverlay(context.Context, *CreateVolumeOverlayRequest) (*CreateVolumeOverlayResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CreateVolumeOverlay not implemented")
+}
+func (UnimplementedFilesystemServiceServer) CreateDirectMount(context.Context, *CreateDirectMountRequest) (*CreateDirectMountResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateDirectMount not implemented")
 }
 func (UnimplementedFilesystemServiceServer) mustEmbedUnimplementedFilesystemServiceServer() {}
 func (UnimplementedFilesystemServiceServer) testEmbeddedByValue()                           {}
@@ -405,6 +429,24 @@ func _FilesystemService_CreateVolumeOverlay_Handler(srv interface{}, ctx context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _FilesystemService_CreateDirectMount_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateDirectMountRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FilesystemServiceServer).CreateDirectMount(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FilesystemService_CreateDirectMount_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FilesystemServiceServer).CreateDirectMount(ctx, req.(*CreateDirectMountRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // FilesystemService_ServiceDesc is the grpc.ServiceDesc for FilesystemService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -443,6 +485,10 @@ var FilesystemService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CreateVolumeOverlay",
 			Handler:    _FilesystemService_CreateVolumeOverlay_Handler,
+		},
+		{
+			MethodName: "CreateDirectMount",
+			Handler:    _FilesystemService_CreateDirectMount_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

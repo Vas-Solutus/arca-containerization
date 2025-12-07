@@ -53,8 +53,14 @@ service FilesystemService {
     // Overlays an EXT4 upper layer on top of VirtioFS lower layer
     // This provides full POSIX compliance (Unix sockets, chmod) while maintaining
     // read access to host files via VirtioFS
-    // Used for k3d/kind support where volumes need Unix socket support
+    // Used for bind mounts that need both host file access AND POSIX compliance
     rpc CreateVolumeOverlay(CreateVolumeOverlayRequest) returns (CreateVolumeOverlayResponse);
+
+    // Create direct volume mount - bind mount EXT4 directory to container path
+    // Creates a directory on the writable EXT4 filesystem and bind mounts it
+    // Provides full POSIX compliance without OverlayFS (allows nested overlays)
+    // Used for named volumes (local driver) that don't need host file access
+    rpc CreateDirectMount(CreateDirectMountRequest) returns (CreateDirectMountResponse);
 }
 
 // Request to check service readiness
@@ -255,6 +261,30 @@ message CreateVolumeOverlayRequest {
 }
 
 message CreateVolumeOverlayResponse {
+    // Success status
+    bool success = 1;
+
+    // Error message if success = false
+    string error = 2;
+}
+
+// Request to create a direct EXT4 bind mount for a volume
+// This creates a directory on the writable EXT4 filesystem and bind mounts it
+// to the container target path. No OverlayFS involved - allows nested overlays.
+message CreateDirectMountRequest {
+    // Container ID (for resolving container rootfs path)
+    string container_id = 1;
+
+    // Volume name - used to create /mnt/writable/volumes/{volume_name}
+    string volume_name = 2;
+
+    // Target mount path relative to container root
+    // e.g., "/var/lib/rancher/k3s"
+    // Will be resolved to /run/container/{container_id}/rootfs{target}
+    string target = 3;
+}
+
+message CreateDirectMountResponse {
     // Success status
     bool success = 1;
 

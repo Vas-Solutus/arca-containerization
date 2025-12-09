@@ -137,6 +137,32 @@ extension Mount {
         fputs("[Mount.mountToTarget] type=\(self.type) source=\(self.source) target=\(target)\n", stderr)
         fflush(stderr)
 
+        // Check if target is a symlink with an absolute path
+        // If so, skip the mount to avoid escaping the rootfs
+        // Example: /var/run -> /run in the container image would cause the mount
+        // to go to the host's /run instead of the container's /run when mounting
+        // from outside the chroot. Since the symlink target already exists in the
+        // container and likely has the appropriate mount, skipping is safe.
+        var targetStat = stat()
+        if lstat(target, &targetStat) == 0 {
+            if (targetStat.st_mode & S_IFMT) == S_IFLNK {
+                // Read the symlink target
+                var linkBuffer = [UInt8](repeating: 0, count: 1024)
+                let linkLen = linkBuffer.withUnsafeMutableBufferPointer { buffer in
+                    readlink(target, buffer.baseAddress!, buffer.count - 1)
+                }
+                if linkLen > 0 {
+                    let linkTarget = String(decoding: linkBuffer.prefix(Int(linkLen)), as: UTF8.self)
+                    if linkTarget.hasPrefix("/") {
+                        // Absolute symlink - would escape rootfs, skip mount
+                        fputs("[Mount.mountToTarget] SKIPPING mount on absolute symlink: \(target) -> \(linkTarget)\n", stderr)
+                        fflush(stderr)
+                        return
+                    }
+                }
+            }
+        }
+
         let pageSize = sysconf(Int32(_SC_PAGESIZE))
 
         let opts = parseMountOptions()

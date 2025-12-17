@@ -29,14 +29,14 @@ public struct AttachedFilesystem: Sendable {
     public var options: [String]
 
     #if os(macOS)
-    public init(mount: Mount, allocator: any AddressAllocator<Character>) throws {
+    public init(mount: Mount, allocator: any AddressAllocator<String>) throws {
         switch mount.type {
         case "virtiofs":
             let name = try hashMountSource(source: mount.source)
             self.source = name
         case "ext4":
-            let char = try allocator.allocate()
-            self.source = "/dev/vd\(char)"
+            let tag = try allocator.allocate()
+            self.source = "/dev/vd\(tag)"
         default:
             self.source = mount.source
         }

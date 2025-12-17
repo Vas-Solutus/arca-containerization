@@ -123,12 +123,36 @@ extension VZVirtualMachineInstance: VirtualMachineInstance {
             // Do any necessary setup needed prior to starting the guest.
             try await self.prestart()
 
-            try await self.vm.start(queue: self.queue)
+            NSLog("[VZVirtualMachineInstance] Starting VM...")
+            do {
+                try await self.vm.start(queue: self.queue)
+                NSLog("[VZVirtualMachineInstance] vm.start() returned successfully")
+            } catch let error as NSError {
+                NSLog("[VZVirtualMachineInstance] vm.start() FAILED:")
+                NSLog("[VZVirtualMachineInstance]   Domain: %@", error.domain)
+                NSLog("[VZVirtualMachineInstance]   Code: %d", error.code)
+                NSLog("[VZVirtualMachineInstance]   Description: %@", error.localizedDescription)
+                NSLog("[VZVirtualMachineInstance]   UserInfo: %@", error.userInfo.description)
+                if let underlying = error.userInfo[NSUnderlyingErrorKey] as? NSError {
+                    NSLog("[VZVirtualMachineInstance]   Underlying Domain: %@", underlying.domain)
+                    NSLog("[VZVirtualMachineInstance]   Underlying Code: %d", underlying.code)
+                    NSLog("[VZVirtualMachineInstance]   Underlying Description: %@", underlying.localizedDescription)
+                }
+                throw error
+            }
 
-            let agent = Vminitd(
-                connection: try await self.vm.waitForAgent(queue: self.queue),
-                group: self.group
-            )
+            NSLog("[VZVirtualMachineInstance] Waiting for agent...")
+            let agent: Vminitd
+            do {
+                agent = Vminitd(
+                    connection: try await self.vm.waitForAgent(queue: self.queue),
+                    group: self.group
+                )
+                NSLog("[VZVirtualMachineInstance] Agent connected successfully")
+            } catch {
+                NSLog("[VZVirtualMachineInstance] waitForAgent FAILED: %@", String(describing: error))
+                throw error
+            }
 
             do {
                 if self.config.rosetta {
@@ -381,6 +405,11 @@ extension VZVirtualMachineInstance.Configuration {
             }
         }
 
+        // Debug: Log device counts before validation
+        NSLog("[VZVirtualMachineInstance] Storage devices: %d", config.storageDevices.count)
+        NSLog("[VZVirtualMachineInstance] Directory sharing devices: %d", config.directorySharingDevices.count)
+        NSLog("[VZVirtualMachineInstance] Network devices: %d", config.networkDevices.count)
+
         let platform = VZGenericPlatformConfiguration()
         // We shouldn't silently succeed if the user asked for virt and their hardware does
         // not support it.
@@ -393,12 +422,19 @@ extension VZVirtualMachineInstance.Configuration {
         platform.isNestedVirtualizationEnabled = self.nestedVirtualization
         config.platform = platform
 
-        try config.validate()
+        NSLog("[VZVirtualMachineInstance] Validating configuration...")
+        do {
+            try config.validate()
+            NSLog("[VZVirtualMachineInstance] Configuration validated successfully")
+        } catch {
+            NSLog("[VZVirtualMachineInstance] Configuration validation FAILED: %@", String(describing: error))
+            throw error
+        }
         return config
     }
 
     func mountAttachments() throws -> [String: [AttachedFilesystem]] {
-        let allocator = Character.blockDeviceTagAllocator()
+        let allocator = String.blockDeviceTagAllocator()
         if let initialFilesystem {
             // When the initial filesystem is a blk, allocate the first letter "vd(a)"
             // as that is what this blk will be attached under.

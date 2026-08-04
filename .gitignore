@@ -28,6 +28,7 @@ _site/
 _serve/
 
 # Arca vminitd extensions - Go build artifacts
+vminitd/extensions/arca-services/arca-services
 vminitd/extensions/filesystem-service/arca-filesystem-service
 vminitd/extensions/wireguard-service/arca-wireguard-service
 vminitd/extensions/tap-forwarder/arca-tap-forwarder

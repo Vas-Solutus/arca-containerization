@@ -684,7 +684,8 @@ extension Initd: Com_Apple_Containerization_Sandbox_V3_SandboxContext.SimpleServ
 
                 guard let opts = await OverlayFSConfig.shared.mountOptions else {
                     log.error("OverlayFS mount options not available")
-                    throw GRPCStatus(code: .internalError, message: "OverlayFS mount options not available")
+                    // grpc-swift v2 (GRPCCore) replaced GRPCStatus with RPCError upstream.
+                    throw RPCError(code: .internalError, message: "OverlayFS mount options not available")
                 }
 
                 try FileManager.default.createDirectory(
@@ -699,7 +700,7 @@ extension Initd: Com_Apple_Containerization_Sandbox_V3_SandboxContext.SimpleServ
                             "destination": "\(request.destination)",
                             "errno": "\(errno)",
                         ])
-                    throw GRPCStatus(code: .internalError, message: "failed to mount OverlayFS: errno \(errno)")
+                    throw RPCError(code: .internalError, message: "failed to mount OverlayFS: errno \(errno)")
                 }
 
                 log.info(

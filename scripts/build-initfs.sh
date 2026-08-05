@@ -31,7 +31,7 @@
 set -euo pipefail
 
 usage() {
-    echo "usage: $0 --vminitd PATH --vmexec PATH --ext4 OUT.ext4 [--tar OUT.tar.gz] [--size 512M]" >&2
+    echo "usage: $0 --vminitd PATH --vmexec PATH --ext4 OUT.ext4 [--tar OUT.tar.gz] [--size 512M] [--add-file SRC:DEST ...]" >&2
     exit 2
 }
 
@@ -40,14 +40,21 @@ VMEXEC=
 EXT4=
 TAR=
 SIZE=512M
+# ARCA PATCH: extra files to stage into the guest rootfs, given as SRC:DEST pairs.
+# cctl accepted --add-file when it assembled the rootfs itself; the 2026-08 upstream merge
+# moved assembly into this script and made `cctl rootfs create` consume a prebuilt tar.
+# Staging here rather than post-processing the tar is what also gets the file into the ext4
+# initfs, since both outputs are produced from $STAGING below.
+ADD_FILES=()
 while [ $# -gt 0 ]; do
     case "$1" in
-        --vminitd) VMINITD=$2; shift 2 ;;
-        --vmexec)  VMEXEC=$2;  shift 2 ;;
-        --ext4)    EXT4=$2;    shift 2 ;;
-        --tar)     TAR=$2;     shift 2 ;;
-        --size)    SIZE=$2;    shift 2 ;;
-        *)         usage ;;
+        --vminitd)  VMINITD=$2; shift 2 ;;
+        --vmexec)   VMEXEC=$2;  shift 2 ;;
+        --ext4)     EXT4=$2;    shift 2 ;;
+        --tar)      TAR=$2;     shift 2 ;;
+        --size)     SIZE=$2;    shift 2 ;;
+        --add-file) ADD_FILES+=("$2"); shift 2 ;;
+        *)          usage ;;
     esac
 done
 
@@ -74,6 +81,20 @@ done
 install -m 0755 "$VMINITD" "$STAGING/sbin/vminitd"
 install -m 0755 "$VMEXEC" "$STAGING/sbin/vmexec"
 ln -sf sbin/vminitd "$STAGING/proc/self/exe"
+
+# ARCA PATCH: stage any --add-file SRC:DEST pairs (e.g. arca-services -> /sbin/arca-services).
+for pair in ${ADD_FILES+"${ADD_FILES[@]}"}; do
+    src=${pair%%:*}
+    dest=${pair#*:}
+    if [ "$src" = "$pair" ] || [ -z "$dest" ]; then
+        echo "ERROR: --add-file expects SRC:DEST, got: $pair" >&2
+        exit 1
+    fi
+    [ -f "$src" ] || { echo "ERROR: --add-file source not found: $src" >&2; exit 1; }
+    mkdir -p "$STAGING/$(dirname "${dest#/}")"
+    install -m 0755 "$src" "$STAGING/${dest#/}"
+    echo "==> staged $src -> $dest"
+done
 
 mkdir -p "$(dirname "$EXT4")"
 rm -f "$EXT4"

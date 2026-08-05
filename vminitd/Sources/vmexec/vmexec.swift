@@ -65,12 +65,29 @@ struct App: ParsableCommand {
     /// Opened once at startup, used by logToConsole()
     private static let consoleFd: Int32 = open("/dev/console", O_WRONLY | O_NOCTTY)
 
+    /// UTC timestamp in ISO 8601, formatted via strftime.
+    ///
+    /// Previously ISO8601DateFormatter. Upstream narrowed vmexec's import from Foundation to
+    /// FoundationEssentials during the 2026-08 merge, and the formatter classes are not in
+    /// FoundationEssentials. Formatting through libc keeps that narrower import intact rather
+    /// than pulling full Foundation back into the guest binary for one log timestamp.
+    private static func timestamp() -> String {
+        var now = time(nil)
+        var parts = tm()
+        gmtime_r(&now, &parts)
+        var buffer = [CChar](repeating: 0, count: 32)
+        let written = strftime(&buffer, buffer.count, "%Y-%m-%dT%H:%M:%SZ", &parts)
+        guard written > 0 else { return "" }
+        // strftime returns the length excluding the null terminator, so slice to it rather
+        // than using String(cString:), which is deprecated.
+        return String(decoding: buffer[..<written].map(UInt8.init(bitPattern:)), as: UTF8.self)
+    }
+
     /// Write a log message directly to /dev/console (VM bootlog).
     /// This bypasses the Logging framework to avoid stderr which Docker captures.
     static func logToConsole(_ message: String) {
         guard consoleFd >= 0 else { return }
-        let timestamp = ISO8601DateFormatter().string(from: Date())
-        let line = "\(timestamp) info vmexec : [vmexec] \(message)\n"
+        let line = "\(timestamp()) info vmexec : [vmexec] \(message)\n"
         _ = line.withCString { ptr in
             Musl.write(consoleFd, ptr, strlen(ptr))
         }

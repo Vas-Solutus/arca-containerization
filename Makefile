@@ -320,7 +320,9 @@ endif
 # variables so `vminitd` (compile only) and `init` (compile + build the initfs
 # in a single container run) don't duplicate the command.
 VMINITD_BUILD_CMD = make -C vminitd BUILD_CONFIGURATION=$(BUILD_CONFIGURATION) WARNINGS_AS_ERRORS=$(WARNINGS_AS_ERRORS)
-INITFS_BUILD_CMD = ./scripts/build-initfs.sh --vminitd vminitd/bin/vminitd --vmexec vminitd/bin/vmexec --ext4 bin/initfs.ext4 --tar bin/init.rootfs.tar.gz
+# ARCA PATCH: stage the unified guest services binary at /sbin/arca-services, which
+# VminitdCore/ArcaBoot.swift starts during AgentCommand bootstrap.
+INITFS_BUILD_CMD = ./scripts/build-initfs.sh --vminitd vminitd/bin/vminitd --vmexec vminitd/bin/vmexec --ext4 bin/initfs.ext4 --tar bin/init.rootfs.tar.gz --add-file vminitd/extensions/arca-services/arca-services:/sbin/arca-services
 
 .PHONY: init
 ifeq ($(UNAME_S),Darwin)

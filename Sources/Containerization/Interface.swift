@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright © 2025 Apple Inc. and the Containerization project authors.
+// Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,15 +14,33 @@
 // limitations under the License.
 //===----------------------------------------------------------------------===//
 
+import ContainerizationExtras
+
 /// A network interface.
 public protocol Interface: Sendable {
     /// The interface IPv4 address and subnet prefix length, as a CIDR address.
     /// Example: `192.168.64.3/24`
-    var address: String { get }
+    var ipv4Address: CIDRv4 { get }
 
-    /// The IP address for the default route, or nil for no default route.
-    var gateway: String? { get }
+    /// The IPv4 gateway address for the default route, or nil for no IPv4 default route.
+    var ipv4Gateway: IPv4Address? { get }
+
+    /// The interface IPv6 address and subnet prefix length, as a CIDRv6 address, or nil for no IPv6 address.
+    /// Example: `fd00::1/64`
+    var ipv6Address: CIDRv6? { get }
+
+    /// The IPv6 gateway address for the default route, or nil for no IPv6 default route.
+    var ipv6Gateway: IPv6Address? { get }
 
     /// The interface MAC address, or nil to auto-configure the address.
-    var macAddress: String? { get }
+    var macAddress: MACAddress? { get }
+
+    /// The interface MTU (Maximum Transmission Unit).
+    var mtu: UInt32 { get }
+}
+
+extension Interface {
+    public var mtu: UInt32 { 1500 }
+    public var ipv6Address: CIDRv6? { nil }
+    public var ipv6Gateway: IPv6Address? { nil }
 }

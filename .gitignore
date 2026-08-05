@@ -7,7 +7,6 @@ xcuserdata/
 DerivedData/
 .swiftpm/
 .netrc
-.swiftpm
 workdir/
 installer/
 .venv/
@@ -21,13 +20,15 @@ test_results/
 *.swp
 *.tar.gz
 *.tar.xz
-vmlinux
+vmlinux*
 
 # API docs for local preview only.
 _site/
 _serve/
+kernel/vmlinuz-x86_64
 
 # Arca vminitd extensions - Go build artifacts
+vminitd/extensions/arca-services/arca-services
 vminitd/extensions/filesystem-service/arca-filesystem-service
 vminitd/extensions/wireguard-service/arca-wireguard-service
 vminitd/extensions/tap-forwarder/arca-tap-forwarder

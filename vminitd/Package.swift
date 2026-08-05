@@ -1,6 +1,6 @@
-// swift-tools-version: 6.2
+// swift-tools-version: 6.3
 //===----------------------------------------------------------------------===//
-// Copyright © 2025 Apple Inc. and the Containerization project authors.
+// Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,7 +17,12 @@
 
 // The swift-tools-version declares the minimum version of Swift required to build this package.
 
+import Foundation
 import PackageDescription
+
+let gitCommit = ProcessInfo.processInfo.environment["GIT_COMMIT"] ?? "unspecified"
+let gitTag = ProcessInfo.processInfo.environment["GIT_TAG"] ?? ""
+let buildTime = ProcessInfo.processInfo.environment["BUILD_TIME"] ?? "unspecified"
 
 let package = Package(
     name: "swift-vminitd",
@@ -27,34 +32,28 @@ let package = Package(
         .executable(name: "vmexec", targets: ["vmexec"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/apple/swift-argument-parser", from: "1.3.0"),
-        .package(url: "https://github.com/apple/swift-log.git", from: "1.0.0"),
-        .package(url: "https://github.com/apple/swift-nio", from: "2.80.0"),
+        .package(url: "https://github.com/apple/swift-argument-parser", from: "1.7.0"),
+        .package(url: "https://github.com/apple/swift-log.git", from: "1.10.1"),
+        .package(url: "https://github.com/apple/swift-system.git", from: "1.6.4"),
         .package(name: "containerization", path: "../"),
     ],
     targets: [
         .target(
-            name: "LCShim"
-        ),
-        .target(
-            name: "Cgroup",
-            dependencies: [
-                .product(name: "Logging", package: "swift-log"),
-                .product(name: "ContainerizationOCI", package: "containerization"),
-                .product(name: "ContainerizationOS", package: "containerization"),
+            name: "CVersion",
+            cSettings: [
+                .define("GIT_COMMIT", to: "\"\(gitCommit)\""),
+                .define("GIT_TAG", to: "\"\(gitTag)\""),
+                .define("BUILD_TIME", to: "\"\(buildTime)\""),
             ]
         ),
         .executableTarget(
             name: "vminitd",
             dependencies: [
-                .product(name: "Logging", package: "swift-log"),
-                .product(name: "_NIOFileSystem", package: "swift-nio"),
-                .product(name: "Containerization", package: "containerization"),
-                .product(name: "ContainerizationNetlink", package: "containerization"),
-                .product(name: "ContainerizationIO", package: "containerization"),
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "ContainerizationOS", package: "containerization"),
-                "LCShim",
-                "Cgroup",
+                .product(name: "Logging", package: "swift-log"),
+                .product(name: "VminitdCore", package: "containerization"),
+                "CVersion",
             ]
         ),
         .executableTarget(
@@ -62,10 +61,10 @@ let package = Package(
             dependencies: [
                 .product(name: "Logging", package: "swift-log"),
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
+                .product(name: "SystemPackage", package: "swift-system"),
                 .product(name: "Containerization", package: "containerization"),
                 .product(name: "ContainerizationOS", package: "containerization"),
-                "LCShim",
-                "Cgroup",
+                .product(name: "VminitdCore", package: "containerization"),
             ]
         ),
     ]

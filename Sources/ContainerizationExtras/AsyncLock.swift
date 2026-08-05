@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright © 2025 Apple Inc. and the Containerization project authors.
+// Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
 // limitations under the License.
 //===----------------------------------------------------------------------===//
 
-import Foundation
+import Logging
 
 /// `AsyncLock` provides a familiar locking API, with the main benefit being that it
 /// is safe to call async methods while holding the lock. This is primarily used in spots
@@ -23,15 +23,19 @@ import Foundation
 public actor AsyncLock {
     private var busy = false
     private var queue: ArraySlice<CheckedContinuation<(), Never>> = []
+    private var log: Logger?
 
     public struct Context: Sendable {
         fileprivate init() {}
     }
 
-    public init() {}
+    public init(log: Logger? = nil) {
+        self.log = log
+    }
 
     /// withLock provides a scoped locking API to run a function while holding the lock.
-    public func withLock<T: Sendable>(_ body: @Sendable @escaping (Context) async throws -> T) async rethrows -> T {
+    public func withLock<T: Sendable>(logMetadata: Logger.Metadata? = nil, _ body: @Sendable @escaping (Context) async throws -> T) async rethrows -> T {
+        log?.debug("acquiring lock", metadata: logMetadata)
         while self.busy {
             await withCheckedContinuation { cc in
                 self.queue.append(cc)
@@ -49,6 +53,8 @@ public actor AsyncLock {
             }
         }
 
+        log?.debug("holding lock", metadata: logMetadata)
+        defer { log?.debug("releasing lock", metadata: logMetadata) }
         let context = Context()
         return try await body(context)
     }

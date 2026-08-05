@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright © 2025 Apple Inc. and the Containerization project authors.
+// Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,10 +17,16 @@
 import ArgumentParser
 import Cgroup
 import ContainerizationOCI
-import Foundation
+import ContainerizationOS
+import FoundationEssentials
 import LCShim
-import Logging
+import SystemPackage
+
+#if canImport(Musl)
 import Musl
+#elseif canImport(Glibc)
+import Glibc
+#endif
 
 struct RunCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
@@ -33,34 +39,131 @@ struct RunCommand: ParsableCommand {
 
     mutating func run() throws {
         do {
-            LoggingSystem.bootstrap(App.standardError)
-            let log = Logger(label: "vmexec")
-
-            let bundle = try ContainerizationOCI.Bundle.load(path: URL(filePath: bundlePath))
-            let ociSpec = try bundle.loadConfig()
-            try execInNamespace(spec: ociSpec, log: log)
+            let spec: ContainerizationOCI.Spec
+            do {
+                let bundle = try ContainerizationOCI.Bundle.load(path: URL(filePath: bundlePath))
+                spec = try bundle.loadConfig()
+            } catch {
+                throw App.Failure(message: "failed to load OCI bundle at \(bundlePath): \(error)")
+            }
+            try execInNamespace(spec: spec)
         } catch {
             App.writeError(error)
             throw error
         }
     }
 
-    private func childRootSetup(rootfs: ContainerizationOCI.Root, mounts: [ContainerizationOCI.Mount], log: Logger) throws {
+    private func childRootSetup(
+        rootfs: ContainerizationOCI.Root,
+        mounts: [ContainerizationOCI.Mount]
+    ) throws {
         // setup rootfs
         try prepareRoot(rootfs: rootfs.path)
         try mountRootfs(rootfs: rootfs.path, mounts: mounts)
         try setDevSymlinks(rootfs: rootfs.path)
 
         try pivotRoot(rootfs: rootfs.path)
+
+        // Remount ro if requested.
+        if rootfs.readonly {
+            try self.remountRootfsReadOnly()
+        }
+
         try reOpenDevNull()
+    }
+
+    /// Mask paths per OCI `linux.maskedPaths`. Files (and any non-directory)
+    /// get `/dev/null` bind-mounted on top; directories get an empty read-only
+    /// tmpfs. Missing paths are skipped silently — matches runc's `maskPath`.
+    private func applyMaskedPaths(_ paths: [String]) throws {
+        for path in paths {
+            var st = stat()
+            if stat(path, &st) != 0 {
+                if errno == ENOENT {
+                    continue
+                }
+                throw App.Errno(stage: "stat(\(path)) for mask")
+            }
+
+            if (st.st_mode & S_IFMT) == S_IFDIR {
+                // Match runc: mask directories with a read-only tmpfs. MS_RDONLY
+                // is what actually prevents writes into the masked dir; a
+                // `size=0k` option would be a no-op (the kernel treats tmpfs
+                // size=0 as "no limit", not an empty filesystem).
+                guard mount("tmpfs", path, "tmpfs", UInt(MS_RDONLY | MS_NOSUID | MS_NODEV | MS_NOEXEC), nil) == 0 else {
+                    throw App.Errno(stage: "mount(tmpfs mask \(path))")
+                }
+            } else {
+                guard mount("/dev/null", path, "bind", UInt(MS_BIND), nil) == 0 else {
+                    throw App.Errno(stage: "mount(bind /dev/null -> \(path))")
+                }
+            }
+        }
+    }
+
+    /// Make paths read-only per OCI `linux.readonlyPaths` by bind-mounting
+    /// each onto itself and remounting with `MS_RDONLY`. Missing paths are
+    /// skipped silently — matches runc's `readonlyPath`. The statfs fallback
+    /// mirrors `remountRootfsReadOnly()` for filesystems whose existing flags
+    /// (e.g. nosuid, nodev) must be preserved on the remount.
+    private func applyReadonlyPaths(_ paths: [String]) throws {
+        for path in paths {
+            var st = stat()
+            if stat(path, &st) != 0 {
+                if errno == ENOENT {
+                    continue
+                }
+                throw App.Errno(stage: "stat(\(path)) for readonly")
+            }
+
+            guard mount(path, path, "", UInt(MS_BIND | MS_REC), nil) == 0 else {
+                throw App.Errno(stage: "mount(bind \(path))")
+            }
+
+            var flags = UInt(MS_BIND | MS_REMOUNT | MS_RDONLY)
+            if mount("", path, "", flags, "") == 0 {
+                continue
+            }
+
+            var s = statfs()
+            guard statfs(path, &s) == 0 else {
+                throw App.Errno(stage: "statfs(\(path))")
+            }
+            flags |= UInt(s.f_flags)
+
+            guard mount("", path, "", flags, "") == 0 else {
+                throw App.Errno(stage: "mount remount-ro \(path)")
+            }
+        }
+    }
+
+    private func remountRootfsReadOnly() throws {
+        var flags = UInt(MS_BIND | MS_REMOUNT | MS_RDONLY)
+
+        let ret = mount("", "/", "", flags, "")
+        if ret == 0 {
+            return
+        }
+
+        var s = statfs()
+        guard statfs("/", &s) == 0 else {
+            throw App.Errno(stage: "statfs(/)")
+        }
+        flags |= UInt(s.f_flags)
+
+        guard mount("", "/", "", flags, "") == 0 else {
+            throw App.Errno(stage: "mount rootfs ro")
+        }
     }
 
     private func childSetup(
         spec: ContainerizationOCI.Spec,
-        ackPipe: FileHandle,
-        syncPipe: FileHandle,
-        namespacesToJoin: [(type: String, path: String, flag: Int32)],
-        log: Logger
+        ackPipe: FileDescriptor,
+        syncPipe: FileDescriptor,
+        // ARCA PATCH: namespaces the child joins before exec. Upstream's `log: Logger`
+        // removal is kept — the fork's body logs only through App.logToConsole, so the
+        // parameter was already unused here.
+        namespacesToJoin: [(type: String, path: String, flag: Int32)]
     ) throws {
         guard let process = spec.process else {
             throw App.Failure(message: "no process configuration found in runtime spec")
@@ -70,13 +173,16 @@ struct RunCommand: ParsableCommand {
         }
 
         // Wait for the grandparent to tell us that they acked our pid.
-        // The network namespace already exists because AddNetwork is called BEFORE container.start().
-        guard let data = try ackPipe.read(upToCount: App.ackPid.count) else {
+        // ARCA: the network namespace already exists here, because AddNetwork is called
+        // BEFORE container.start().
+        var pidAckBuffer = [UInt8](repeating: 0, count: App.ackPid.count)
+        let pidAckBytesRead = try pidAckBuffer.withUnsafeMutableBytes { buffer in
+            try ackPipe.read(into: buffer)
+        }
+        guard pidAckBytesRead > 0 else {
             throw App.Failure(message: "read ack pipe")
         }
-        guard let pidAckStr = String(data: data, encoding: .utf8) else {
-            throw App.Failure(message: "convert ack pipe data to string")
-        }
+        let pidAckStr = String(decoding: pidAckBuffer[..<pidAckBytesRead], as: UTF8.self)
 
         guard pidAckStr == App.ackPid else {
             throw App.Failure(message: "received invalid acknowledgement string: \(pidAckStr)")
@@ -106,24 +212,26 @@ struct RunCommand: ParsableCommand {
             throw App.Errno(stage: "setsid()")
         }
 
-        try childRootSetup(rootfs: root, mounts: spec.mounts, log: log)
+        try childRootSetup(rootfs: root, mounts: spec.mounts)
 
         if process.terminal {
             let pty = try Console()
             try pty.configureStdIO()
             var masterFD = pty.master
 
-            let data = Data(bytes: &masterFD, count: MemoryLayout.size(ofValue: masterFD))
-            try syncPipe.write(contentsOf: data)
+            try withUnsafeBytes(of: &masterFD) { bytes in
+                _ = try syncPipe.write(bytes)
+            }
 
             // Wait for the grandparent to tell us that they acked our console.
-            guard let data = try ackPipe.read(upToCount: App.ackConsole.count) else {
+            var consoleAckBuffer = [UInt8](repeating: 0, count: App.ackConsole.count)
+            let consoleAckBytesRead = try consoleAckBuffer.withUnsafeMutableBytes { buffer in
+                try ackPipe.read(into: buffer)
+            }
+            guard consoleAckBytesRead > 0 else {
                 throw App.Failure(message: "read ack pipe")
             }
-
-            guard let consoleAckStr = String(data: data, encoding: .utf8) else {
-                throw App.Failure(message: "convert ack pipe data to string")
-            }
+            let consoleAckStr = String(decoding: consoleAckBuffer[..<consoleAckBytesRead], as: UTF8.self)
 
             guard consoleAckStr == App.ackConsole else {
                 throw App.Failure(message: "received invalid acknowledgement string: \(consoleAckStr)")
@@ -139,12 +247,37 @@ struct RunCommand: ParsableCommand {
 
         if !spec.hostname.isEmpty {
             let errCode = spec.hostname.withCString { ptr in
-                Musl.sethostname(ptr, spec.hostname.count)
+                sethostname(ptr, spec.hostname.count)
             }
             guard errCode == 0 else {
                 throw App.Errno(stage: "sethostname()")
             }
         }
+
+        // Apply sysctls from the OCI spec.
+        if let sysctls = spec.linux?.sysctl {
+            for (key, value) in sysctls {
+                let path = "/proc/sys/" + key.replacingOccurrences(of: ".", with: "/")
+                let fd = open(path, O_WRONLY)
+                guard fd >= 0 else {
+                    throw App.Errno(stage: "sysctl open(\(path))")
+                }
+                defer { close(fd) }
+                let bytes = Array(value.utf8)
+                let written = write(fd, bytes, bytes.count)
+                guard written == bytes.count else {
+                    throw App.Errno(stage: "sysctl write(\(key)=\(value))")
+                }
+            }
+        }
+
+        // Apply OCI maskedPaths/readonlyPaths AFTER sysctls (writes to
+        // /proc/sys/* would otherwise fail once /proc/sys is remounted ro)
+        // and BEFORE the user/capability change (mount() requires
+        // CAP_SYS_ADMIN, which we still have here as root). Mask runs first
+        // so a path appearing in both lists is hidden, not just locked.
+        try self.applyMaskedPaths(spec.linux?.maskedPaths ?? [])
+        try self.applyReadonlyPaths(spec.linux?.readonlyPaths ?? [])
 
         // Apply O_CLOEXEC to all file descriptors except stdio.
         // This ensures that all unwanted fds we may have accidentally
@@ -154,69 +287,93 @@ struct RunCommand: ParsableCommand {
 
         try App.setRLimits(rlimits: process.rlimits)
 
+        // Prepare capabilities (before user change)
+        let preparedCaps = try App.prepareCapabilities(capabilities: process.capabilities ?? ContainerizationOCI.LinuxCapabilities())
+
         // Change stdio to be owned by the requested user.
         try App.fixStdioPerms(user: process.user)
 
         // Set uid, gid, and supplementary groups.
         try App.setPermissions(user: process.user)
 
+        // Finish capabilities (after user change)
+        try App.finishCapabilities(preparedCaps)
+
+        // Set no_new_privs if requested by the OCI spec.
+        try App.setNoNewPrivileges(process: process)
+
         // Finally execve the container process.
         try App.exec(process: process, currentEnv: process.env)
     }
 
-    private func execInNamespace(spec: ContainerizationOCI.Spec, log: Logger) throws {
-        let syncPipe = FileHandle(fileDescriptor: 3)
-        let ackPipe = FileHandle(fileDescriptor: 4)
+    /// Returns the flags to unshare, plus the namespaces the child must join after the ack.
+    ///
+    /// ARCA PATCH: upstream returns only `Int32` and performs the joins itself. The join
+    /// list is returned instead so `childSetup()` can perform them at the correct point in
+    /// the sequence — see the note in the body.
+    private func setupNamespaces(
+        namespaces: [ContainerizationOCI.LinuxNamespace]?
+    ) throws -> (flags: Int32, toJoin: [(type: String, path: String, flag: Int32)]) {
+        var unshareFlags: Int32 = 0
 
-        // Build unshare flags dynamically from OCI spec namespaces
-        // Always create PID, mount, and UTS namespaces (Docker standard)
-        var unshareFlags: Int32 = CLONE_NEWPID | CLONE_NEWNS | CLONE_NEWUTS
+        // ARCA PATCH: upstream joins existing namespaces here, with setns(), before
+        // unshare(). The fork defers joining into childSetup(), after the child has read the
+        // pid ack from ManagedProcess. That ordering is deliberate (fork commit f48a6c7):
+        // AddNetwork runs before container.start(), and the join is sequenced against the
+        // ack rather than against vmexec's own startup.
+        //
+        // Preserved rather than adopting upstream's earlier join: a namespace-ordering
+        // regression fails at runtime on the networking path, which is the product's core
+        // value, and no test covers it. Also note only network/ipc/user are deferred —
+        // joining a PID namespace after fork() would not affect the already-forked child.
+        // Revisit under P0.4 (functional pass) and P8.2 (fork reduction).
 
-        // Track namespaces to join (those with paths specified in OCI spec)
+        // Always create PID, mount and UTS namespaces (Docker standard).
+        unshareFlags = CLONE_NEWPID | CLONE_NEWNS | CLONE_NEWUTS
+
+        guard let namespaces else {
+            return (unshareFlags, [])
+        }
+
         var namespacesToJoin: [(type: String, path: String, flag: Int32)] = []
+        for ns in namespaces {
+            let flag: Int32
+            switch ns.type {
+            case .network:
+                flag = CLONE_NEWNET
+            case .ipc:
+                flag = CLONE_NEWIPC
+            case .user:
+                flag = CLONE_NEWUSER
+            default:
+                // .pid, .mount, .uts, .cgroup are already covered above or unhandled.
+                continue
+            }
 
-        // Add additional namespaces requested in the OCI spec
-        if let linux = spec.linux {
-            for namespace in linux.namespaces {
-                // If namespace has a non-empty path, we join it instead of creating new
-                let path = namespace.path
-                if !path.isEmpty {
-                    let flag: Int32
-                    switch namespace.type {
-                    case .network:
-                        flag = CLONE_NEWNET
-                    case .ipc:
-                        flag = CLONE_NEWIPC
-                    case .user:
-                        flag = CLONE_NEWUSER
-                    default:
-                        continue
-                    }
-                    namespacesToJoin.append((type: namespace.type.rawValue, path: path, flag: flag))
-                    // Use App.logToConsole to write to VM bootlog, not container stderr
-                    App.logToConsole("Will join existing \(namespace.type.rawValue) namespace at \(path)")
-                } else {
-                    // No path - create new namespace
-                    switch namespace.type {
-                    case .network:
-                        unshareFlags |= CLONE_NEWNET
-                    case .ipc:
-                        unshareFlags |= CLONE_NEWIPC
-                    case .user:
-                        unshareFlags |= CLONE_NEWUSER
-                    // .pid, .mount, .uts, .cgroup are handled separately or already included
-                    default:
-                        break
-                    }
-                }
+            if ns.path.isEmpty {
+                // No path - create a new namespace.
+                unshareFlags |= flag
+            } else {
+                // Has a path - join it later, in childSetup().
+                namespacesToJoin.append((type: ns.type.rawValue, path: ns.path, flag: flag))
+                // App.logToConsole writes to the VM bootlog, not container stderr.
+                App.logToConsole("Will join existing \(ns.type.rawValue) namespace at \(ns.path)")
             }
         }
 
-        // Create new namespaces via unshare
-        // Note: Joining existing namespaces (those with paths) happens in childSetup()
-        // AFTER receiving ack from ManagedProcess, which waits for namespace to exist
+        return (unshareFlags, namespacesToJoin)
+    }
+
+    private func execInNamespace(spec: ContainerizationOCI.Spec) throws {
+        let syncPipe = FileDescriptor(rawValue: 3)
+        let ackPipe = FileDescriptor(rawValue: 4)
+
+        let (unshareFlags, namespacesToJoin) = try setupNamespaces(namespaces: spec.linux?.namespaces)
+
+        // Create new namespaces via unshare. Joining existing ones happens in childSetup()
+        // after the ack, per the note above.
         guard unshare(unshareFlags) == 0 else {
-            throw App.Errno(stage: "unshare(namespaces)")
+            throw App.Errno(stage: "unshare(\(unshareFlags))")
         }
 
         let processID = fork()
@@ -227,7 +384,7 @@ struct RunCommand: ParsableCommand {
         }
 
         if processID == 0 {  // child
-            try childSetup(spec: spec, ackPipe: ackPipe, syncPipe: syncPipe, namespacesToJoin: namespacesToJoin, log: log)
+            try childSetup(spec: spec, ackPipe: ackPipe, syncPipe: syncPipe, namespacesToJoin: namespacesToJoin)
         } else {  // parent process
             // Setup cgroup before child enters cgroup namespace
             if let linux = spec.linux {
@@ -245,8 +402,9 @@ struct RunCommand: ParsableCommand {
 
             // Send our child's pid before we exit.
             var childPid = processID
-            let data = Data(bytes: &childPid, count: MemoryLayout.size(ofValue: childPid))
-            try syncPipe.write(contentsOf: data)
+            try withUnsafeBytes(of: &childPid) { bytes in
+                _ = try syncPipe.write(bytes)
+            }
         }
     }
 

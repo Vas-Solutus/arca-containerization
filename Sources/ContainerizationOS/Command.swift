@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright © 2025 Apple Inc. and the Containerization project authors.
+// Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -54,6 +54,8 @@ public struct Command: Sendable {
     public struct Attrs: Sendable {
         /// Set pgroup for the new process.
         public var setPGroup: Bool
+        /// Make the new process group the foreground process group (requires setPGroup).
+        public var setForegroundPGroup: Bool
         /// Inherit the real uid/gid of the parent.
         public var resetIDs: Bool
         /// Reset the child's signal handlers to the default.
@@ -73,6 +75,7 @@ public struct Command: Sendable {
 
         public init(
             setPGroup: Bool = false,
+            setForegroundPGroup: Bool = false,
             resetIDs: Bool = false,
             setSignalDefault: Bool = true,
             signalMask: UInt32 = 0,
@@ -83,6 +86,7 @@ public struct Command: Sendable {
             pdeathSignal: Int32? = nil
         ) {
             self.setPGroup = setPGroup
+            self.setForegroundPGroup = setForegroundPGroup
             self.resetIDs = resetIDs
             self.setSignalDefault = setSignalDefault
             self.signalMask = signalMask
@@ -183,7 +187,9 @@ extension Command {
 
         let set = try createFileset()
         defer {
-            try? set.null.close()
+            for nullHandle in set.nullHandles {
+                try? nullHandle.close()
+            }
         }
         var fds = [Int32](repeating: 0, count: set.handles.count)
         for (i, handle) in set.handles.enumerated() {
@@ -193,6 +199,7 @@ extension Command {
         attrs.setsid = self.attrs.setsid ? 1 : 0
         attrs.setctty = self.attrs.setctty ? 1 : 0
         attrs.setpgid = self.attrs.setPGroup ? 1 : 0
+        attrs.setfgpgrp = self.attrs.setForegroundPGroup ? 1 : 0
 
         var cwdPath: UnsafeMutablePointer<CChar>?
         if let chdir = self.directory {
@@ -248,21 +255,22 @@ extension Command {
     }
 
     /// Create a posix_spawn file actions set of fds to pass to the new process
-    private func createFileset() throws -> (null: FileHandle, handles: [FileHandle]) {
-        // grab dev null incase a handle passed by the user is nil
-        let null = try openDevNull()
+    private func createFileset() throws -> (nullHandles: [FileHandle], handles: [FileHandle]) {
+        // grab dev null handles for different purposes
+        let nullRead = try openDevNull(flags: O_RDONLY)
+        let nullWrite = try openDevNull(flags: O_WRONLY)
         var files = [FileHandle]()
-        files.append(stdin ?? null)
-        files.append(stdout ?? null)
-        files.append(stderr ?? null)
+        files.append(stdin ?? nullRead)
+        files.append(stdout ?? nullWrite)
+        files.append(stderr ?? nullWrite)
         files.append(contentsOf: extraFiles)
-        return (null: null, handles: files)
+        return (nullHandles: [nullRead, nullWrite], handles: files)
     }
 
-    /// Returns a file handle to /dev/null.
-    private func openDevNull() throws -> FileHandle {
-        let fd = open("/dev/null", O_WRONLY, 0)
-        guard fd > 0 else {
+    /// Returns a file handle to /dev/null with the specified flags.
+    private func openDevNull(flags: Int32) throws -> FileHandle {
+        let fd = open("/dev/null", flags, 0)
+        guard fd >= 0 else {
             throw POSIXError(.init(rawValue: errno)!)
         }
         return FileHandle(fileDescriptor: fd, closeOnDealloc: false)

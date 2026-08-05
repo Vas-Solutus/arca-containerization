@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright © 2025 Apple Inc. and the Containerization project authors.
+// Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,6 +21,20 @@ import Foundation
 
 /// Platform describes the platform which the image in the manifest runs on.
 public struct Platform: Sendable, Equatable {
+    /// Normalizes a raw architecture string (e.g. from uname) to its OCI equivalent.
+    static func normalizeArch(_ raw: String) -> (arch: String, variant: String?) {
+        switch raw {
+        case "aarch64", "arm64":
+            return ("arm64", "v8")
+        case "x86_64", "x86-64", "amd64":
+            return ("amd64", nil)
+        case "arm", "armhf", "armel":
+            return ("arm", "v7")
+        default:
+            return (raw, nil)
+        }
+    }
+
     public static var current: Self {
         var systemInfo = utsname()
         uname(&systemInfo)
@@ -29,14 +43,8 @@ public struct Platform: Sendable, Equatable {
                 String(cString: $0)
             }
         }
-        switch arch {
-        case "arm64":
-            return .init(arch: "arm64", os: "linux", variant: "v8")
-        case "x86_64":
-            return .init(arch: "amd64", os: "linux")
-        default:
-            fatalError("unsupported arch \(arch)")
-        }
+        let normalized = normalizeArch(arch)
+        return .init(arch: normalized.arch, os: "linux", variant: normalized.variant)
     }
 
     /// The computed description, for example, `linux/arm64/v8`.
@@ -48,18 +56,9 @@ public struct Platform: Sendable, Equatable {
         return "\(os)/\(architecture)"
     }
 
-    /// The CPU architecture, for example, `amd64` or `ppc64`.
+    /// The CPU architecture, for example, `amd64` or `arm64`.
     public var architecture: String {
-        switch _rawArch {
-        case "arm64", "aarch64":
-            return "arm64"
-        case "x86_64", "x86-64", "amd64":
-            return "amd64"
-        case "386", "ppc64le", "i386", "s390x", "riscv64":
-            return _rawArch
-        default:
-            return _rawArch
-        }
+        Self.normalizeArch(_rawArch).arch
     }
 
     /// The operating system, for example, `linux` or `windows`.
@@ -105,28 +104,24 @@ public struct Platform: Sendable, Equatable {
     public init(from platform: String) throws {
         let items = platform.split(separator: "/", maxSplits: 1)
         guard let osValue = items.first else {
-            throw ContainerizationError(.invalidArgument, message: "Missing OS in \(platform)")
+            throw ContainerizationError(.invalidArgument, message: "missing OS in \(platform)")
         }
         switch osValue {
-        case "linux":
-            _rawOS = osValue.description
-        case "darwin":
-            _rawOS = osValue.description
-        case "windows":
+        case "linux", "windows", "darwin":
             _rawOS = osValue.description
         default:
-            throw ContainerizationError(.invalidArgument, message: "Unknown OS in \(osValue)")
+            throw ContainerizationError(.invalidArgument, message: "unknown OS in \(osValue)")
         }
         guard items.count > 1 else {
-            throw ContainerizationError(.invalidArgument, message: "Missing architecture in \(platform)")
+            throw ContainerizationError(.invalidArgument, message: "missing architecture in \(platform)")
         }
 
         guard let archItems = items.last?.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false) else {
-            throw ContainerizationError(.invalidArgument, message: "Missing architecture in \(platform)")
+            throw ContainerizationError(.invalidArgument, message: "missing architecture in \(platform)")
         }
 
         guard let archName = archItems.first else {
-            throw ContainerizationError(.invalidArgument, message: "Missing architecture in \(platform)")
+            throw ContainerizationError(.invalidArgument, message: "missing architecture in \(platform)")
         }
 
         switch archName {
@@ -144,7 +139,7 @@ public struct Platform: Sendable, Equatable {
 
         if archItems.count == 2 {
             guard let archVariant = archItems.last else {
-                throw ContainerizationError(.invalidArgument, message: "Missing variant in \(platform)")
+                throw ContainerizationError(.invalidArgument, message: "missing variant in \(platform)")
             }
 
             switch archName {
@@ -153,40 +148,40 @@ public struct Platform: Sendable, Equatable {
                 case "v5", "v6", "v7", "v8":
                     variant = archVariant.description
                 default:
-                    throw ContainerizationError(.invalidArgument, message: "Invalid variant \(archVariant)")
+                    throw ContainerizationError(.invalidArgument, message: "invalid variant \(archVariant)")
                 }
             case "armhf":
                 switch archVariant {
                 case "v7":
                     variant = "v7"
                 default:
-                    throw ContainerizationError(.invalidArgument, message: "Invalid variant \(archVariant)")
+                    throw ContainerizationError(.invalidArgument, message: "invalid variant \(archVariant)")
                 }
             case "armel":
                 switch archVariant {
                 case "v6":
                     variant = "v6"
                 default:
-                    throw ContainerizationError(.invalidArgument, message: "Invalid variant \(archVariant)")
+                    throw ContainerizationError(.invalidArgument, message: "invalid variant \(archVariant)")
                 }
             case "aarch64", "arm64":
                 switch archVariant {
                 case "v8", "8":
                     variant = "v8"
                 default:
-                    throw ContainerizationError(.invalidArgument, message: "Invalid variant \(archVariant)")
+                    throw ContainerizationError(.invalidArgument, message: "invalid variant \(archVariant)")
                 }
             case "x86_64", "x86-64", "amd64":
                 switch archVariant {
                 case "v1":
                     variant = nil
                 default:
-                    throw ContainerizationError(.invalidArgument, message: "Invalid variant \(archVariant)")
+                    throw ContainerizationError(.invalidArgument, message: "invalid variant \(archVariant)")
                 }
             case "i386", "386", "ppc64le", "riscv64":
-                throw ContainerizationError(.invalidArgument, message: "Invalid variant \(archVariant)")
+                throw ContainerizationError(.invalidArgument, message: "invalid variant \(archVariant)")
             default:
-                throw ContainerizationError(.invalidArgument, message: "Invalid variant \(archVariant)")
+                throw ContainerizationError(.invalidArgument, message: "invalid variant \(archVariant)")
             }
         }
     }
@@ -194,20 +189,18 @@ public struct Platform: Sendable, Equatable {
 }
 
 extension Platform: Hashable {
-    /**
-      `~=` compares two platforms to check if **lhs** platform images are compatible with **rhs** platform
-      This operator can be used to check if an image of **lhs** platform can run on **rhs**:
-      - `true`:  when **rhs**=`arm/v8`, **lhs** is any of `arm/v8`, `arm/v7`, `arm/v6` and `arm/v5`
-      - `true`:  when **rhs**=`arm/v7`, **lhs** is any of `arm/v7`, `arm/v6` and `arm/v5`
-      - `true`:  when **rhs**=`arm/v6`, **lhs** is any of `arm/v6` and `arm/v5`
-      - `true`:  when **rhs**=`amd64`, **lhs** is any of `amd64` and `386`
-      - `true`:  when **rhs**=**lhs**
-      - `false`:  otherwise
-      - Parameters:
-         - lhs: platform whose compatibility is being checked
-         - rhs: platform against which compatibility is being checked
-      - Returns: `true | false`
-     */
+    ///  `~=` compares two platforms to check if **lhs** platform images are compatible with **rhs** platform
+    ///  This operator can be used to check if an image of **lhs** platform can run on **rhs**:
+    ///  - `true`:  when **rhs**=`arm/v8`, **lhs** is any of `arm/v8`, `arm/v7`, `arm/v6` and `arm/v5`
+    ///  - `true`:  when **rhs**=`arm/v7`, **lhs** is any of `arm/v7`, `arm/v6` and `arm/v5`
+    ///  - `true`:  when **rhs**=`arm/v6`, **lhs** is any of `arm/v6` and `arm/v5`
+    ///  - `true`:  when **rhs**=`amd64`, **lhs** is any of `amd64` and `386`
+    ///  - `true`:  when **rhs**=**lhs**
+    ///  - `false`:  otherwise
+    ///  - Parameters:
+    ///     - lhs: platform whose compatibility is being checked
+    ///     - rhs: platform against which compatibility is being checked
+    ///  - Returns: `true | false`
     public static func ~= (lhs: Platform, rhs: Platform) -> Bool {
         if lhs.os == rhs.os {
             if lhs._rawArch == rhs._rawArch {
@@ -279,7 +272,14 @@ extension Platform: Hashable {
     }
 
     public func hash(into hasher: inout Swift.Hasher) {
-        hasher.combine(description)
+        hasher.combine(os)
+        hasher.combine(architecture)
+        // arm64 with no variant is equivalent to arm64/v8 per the == implementation
+        if architecture == "arm64" {
+            hasher.combine(variant ?? "v8")
+        } else {
+            hasher.combine(variant)
+        }
     }
 }
 
@@ -302,11 +302,11 @@ extension Platform: Codable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let architecture = try container.decodeIfPresent(String.self, forKey: .architecture)
         guard let architecture else {
-            throw ContainerizationError(.invalidArgument, message: "Missing architecture")
+            throw ContainerizationError(.invalidArgument, message: "missing architecture")
         }
         let os = try container.decodeIfPresent(String.self, forKey: .os)
         guard let os else {
-            throw ContainerizationError(.invalidArgument, message: "Missing OS")
+            throw ContainerizationError(.invalidArgument, message: "missing OS")
         }
         let variant = try container.decodeIfPresent(String.self, forKey: .variant)
         self.init(arch: architecture, os: os, variant: variant)

@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright © 2025 Apple Inc. and the Containerization project authors.
+// Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -60,4 +60,8 @@ public protocol ContentStore: Sendable {
     /// Cancels a previously started ingest session corresponding to `id`.
     /// The contents from the ingest directory corresponding to the session are removed.
     func cancelIngestSession(_ id: String) async throws
+
+    /// Total bytes allocated on disk for the content store, covering
+    /// committed blobs and any active ingest sessions.
+    func totalAllocatedSize() async throws -> UInt64
 }

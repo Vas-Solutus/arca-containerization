@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright © 2025 Apple Inc. and the Containerization project authors.
+// Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -49,6 +49,34 @@ struct TestEXT4ExtendedAttribute {
             #expect(ret.0 == test.expectedId)
             #expect(ret.1 == test.expectedStr)
         }
+    }
+
+    @Test func lastXattrNotDroppedAtBufferBoundary() throws {
+        let buffer: [UInt8] = [
+            0,  // nameLength
+            8,  // nameIndex
+            0, 0,  // valueOffset
+            0, 0, 0, 0,  // valueInum
+            0, 0, 0, 0,  // valueSize
+            0, 0, 0, 0,  // hash
+        ]
+        let attrs = try EXT4.FileXattrsState.read(buffer: buffer, start: 0, offset: 0)
+        try #require(attrs.count == 1)
+        #expect(attrs[0].fullName == "system.richacl")
+    }
+
+    @Test func xattrOutOfBoundsValueDoesNotCrash() throws {
+        let buffer: [UInt8] = [
+            1,  // nameLength
+            1,  // nameIndex
+            17, 0,  // valueOffset
+            0, 0, 0, 0,  // valueInum
+            4, 0, 0, 0,  // valueSize
+            0, 0, 0, 0,  // hash
+            UInt8(ascii: "a"), 0, 0, 0,  // name
+        ]
+        let attrs = try EXT4.FileXattrsState.read(buffer: buffer, start: 0, offset: 0)
+        #expect(attrs.isEmpty)
     }
 
     @Test func encodeDecodeAttributes() {

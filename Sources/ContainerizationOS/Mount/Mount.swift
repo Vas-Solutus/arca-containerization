@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright © 2025 Apple Inc. and the Containerization project authors.
+// Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,7 +14,13 @@
 // limitations under the License.
 //===----------------------------------------------------------------------===//
 
+import CShim
+
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
 import Foundation
+#endif
 
 #if canImport(Musl)
 import Musl
@@ -116,13 +122,170 @@ extension Mount {
     }
 
     /// Mount the mount relative to `root` with the current set of data in the object.
+    ///
     /// Optionally provide `createWithPerms` to set the permissions for the directory that
     /// it will be mounted at.
     public func mount(root: String, createWithPerms: Int16? = nil) throws {
-        var rootURL = URL(fileURLWithPath: root)
-        rootURL = rootURL.resolvingSymlinksInPath()
-        rootURL = rootURL.appendingPathComponent(self.target)
-        try self.mountToTarget(target: rootURL.path, createWithPerms: createWithPerms)
+        let fd = try secureResolveInRoot(root: root)
+        defer { close(fd) }
+
+        let realPath = try readlinkProc(fd: fd)
+        try self.mountToTarget(target: realPath, createWithPerms: createWithPerms, targetResolved: true)
+    }
+
+    /// Open a path relative to `dirFd` using `openat2(2)` with `RESOLVE_IN_ROOT`.
+    ///
+    /// All symlink resolution is confined to the directory tree beneath `dirFd`.
+    /// Returns the file descriptor on success, or -1 on failure (with errno set).
+    private func openInRoot(dirFd: Int32, path: String, flags: Int32, mode: UInt64 = 0) -> Int32 {
+        path.withCString { cPath in
+            var how = cz_open_how(
+                flags: UInt64(flags),
+                mode: mode,
+                resolve: UInt64(RESOLVE_IN_ROOT)
+            )
+            return CZ_openat2(dirFd, cPath, &how, MemoryLayout<cz_open_how>.size)
+        }
+    }
+
+    private func secureResolveInRoot(root: String) throws -> Int32 {
+        let rootFd = open(root, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        guard rootFd >= 0 else {
+            throw Error.errno(errno, "failed to open rootfs '\(root)'")
+        }
+
+        // Determine if the leaf mount point should be a file or directory.
+        let opts = parseMountOptions()
+        let isBindMount = (opts.flags & Int32(MS_BIND)) != 0
+        var leafIsFile = false
+        if isBindMount {
+            var sourceStat = stat()
+            if stat(self.source, &sourceStat) == 0 {
+                leafIsFile = (sourceStat.st_mode & S_IFMT) != S_IFDIR
+            }
+        }
+
+        // Normalize target to a relative path for openat2.
+        let relativePath = self.target
+            .split(separator: "/", omittingEmptySubsequences: true)
+            .joined(separator: "/")
+
+        guard !relativePath.isEmpty else {
+            return rootFd
+        }
+
+        // Fast path: try openat2 with RESOLVE_IN_ROOT for the full path.
+        let openFlags: Int32 =
+            leafIsFile
+            ? (O_RDONLY | O_CLOEXEC)
+            : (O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        let fd = openInRoot(dirFd: rootFd, path: relativePath, flags: openFlags)
+        if fd >= 0 {
+            close(rootFd)
+            return fd
+        }
+
+        guard errno == ENOENT else {
+            let savedErrno = errno
+            close(rootFd)
+            throw Error.errno(savedErrno, "failed to resolve '\(self.target)' in rootfs")
+        }
+
+        // Part of the path doesn't exist. Use openat2 to find the deepest
+        // existing ancestor, then create the missing components.
+        return try createMountTarget(
+            rootFd: rootFd, relativePath: relativePath, leafIsFile: leafIsFile
+        )
+    }
+
+    private func createMountTarget(
+        rootFd: Int32,
+        relativePath: String,
+        leafIsFile: Bool
+    ) throws -> Int32 {
+        let components = relativePath.split(separator: "/").map(String.init)
+        var currentFd = rootFd
+        var resultFd: Int32 = -1
+
+        // Centralized cleanup. On success resultFd holds the fd we return,
+        // so we avoid closing it. On error resultFd is -1 and we close
+        // everything.
+        defer {
+            if currentFd != rootFd && currentFd != resultFd { close(currentFd) }
+            if rootFd != resultFd { close(rootFd) }
+        }
+
+        func fail(_ savedErrno: Int32, _ message: String) throws -> Never {
+            throw Error.errno(savedErrno, message)
+        }
+
+        // Find the deepest existing directory using openat2 with RESOLVE_IN_ROOT.
+        var firstMissing = 0
+        for i in 0..<components.count {
+            let subpath = components[0...i].joined(separator: "/")
+            let nextFd = openInRoot(dirFd: rootFd, path: subpath, flags: O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+            if nextFd < 0 {
+                firstMissing = i
+                break
+            }
+            if currentFd != rootFd { close(currentFd) }
+            currentFd = nextFd
+            firstMissing = i + 1
+        }
+
+        // Create missing directories and the leaf mount point.
+        for i in firstMissing..<components.count {
+            let component = components[i]
+            let isLast = (i == components.count - 1)
+
+            if isLast && leafIsFile {
+                // Use mknodat to create a regular file without opening it.
+                let rc = mknodat(currentFd, component, S_IFREG | 0o644, 0)
+                if rc != 0 && errno != EEXIST {
+                    try fail(errno, "failed to create mount point file '\(component)'")
+                }
+                let pathFd = openat(currentFd, component, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+                guard pathFd >= 0 else {
+                    try fail(errno, "failed to re-open mount point file '\(component)'")
+                }
+                resultFd = pathFd
+                return resultFd
+            }
+
+            guard mkdirat(currentFd, component, 0o755) == 0 else {
+                try fail(errno, "failed to create directory '\(component)'")
+            }
+
+            let dirFd = openat(currentFd, component, O_RDONLY | O_NOFOLLOW | O_DIRECTORY | O_CLOEXEC)
+            guard dirFd >= 0 else {
+                try fail(errno, "failed to open created directory '\(component)'")
+            }
+
+            if isLast {
+                resultFd = dirFd
+                return resultFd
+            }
+
+            if currentFd != rootFd { close(currentFd) }
+            currentFd = dirFd
+        }
+
+        // All components already existed.
+        resultFd = currentFd
+        return resultFd
+    }
+
+    /// Resolve the real filesystem path for an open fd via /proc/self/fd.
+    private func readlinkProc(fd: Int32) throws -> String {
+        let procPath = "/proc/self/fd/\(fd)"
+        var buffer = [CChar](repeating: 0, count: Int(PATH_MAX) + 1)
+        let len = readlink(procPath, &buffer, buffer.count - 1)
+        guard len > 0 else {
+            throw Error.errno(errno, "readlink failed for '\(procPath)'")
+        }
+        return buffer.prefix(len).withUnsafeBufferPointer { buf in
+            String(decoding: buf.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+        }
     }
 
     /// Mount the mount with the current set of data in the object. Optionally
@@ -132,37 +295,7 @@ extension Mount {
         try self.mountToTarget(target: self.target, createWithPerms: createWithPerms)
     }
 
-    private func mountToTarget(target: String, createWithPerms: Int16?) throws {
-        // Debug logging for VirtioFS mounts
-        fputs("[Mount.mountToTarget] type=\(self.type) source=\(self.source) target=\(target)\n", stderr)
-        fflush(stderr)
-
-        // Check if target is a symlink with an absolute path
-        // If so, skip the mount to avoid escaping the rootfs
-        // Example: /var/run -> /run in the container image would cause the mount
-        // to go to the host's /run instead of the container's /run when mounting
-        // from outside the chroot. Since the symlink target already exists in the
-        // container and likely has the appropriate mount, skipping is safe.
-        var targetStat = stat()
-        if lstat(target, &targetStat) == 0 {
-            if (targetStat.st_mode & S_IFMT) == S_IFLNK {
-                // Read the symlink target
-                var linkBuffer = [UInt8](repeating: 0, count: 1024)
-                let linkLen = linkBuffer.withUnsafeMutableBufferPointer { buffer in
-                    readlink(target, buffer.baseAddress!, buffer.count - 1)
-                }
-                if linkLen > 0 {
-                    let linkTarget = String(decoding: linkBuffer.prefix(Int(linkLen)), as: UTF8.self)
-                    if linkTarget.hasPrefix("/") {
-                        // Absolute symlink - would escape rootfs, skip mount
-                        fputs("[Mount.mountToTarget] SKIPPING mount on absolute symlink: \(target) -> \(linkTarget)\n", stderr)
-                        fflush(stderr)
-                        return
-                    }
-                }
-            }
-        }
-
+    private func mountToTarget(target: String, createWithPerms: Int16?, targetResolved: Bool = false) throws {
         let pageSize = sysconf(Int32(_SC_PAGESIZE))
 
         let opts = parseMountOptions()
@@ -176,42 +309,47 @@ extension Mount {
         // Ensure propagation type change flags aren't included in other calls.
         let originalFlags = opts.flags & ~(propagationTypes)
 
-        // Use the 'target' parameter which has rootfs prefix, not self.target
-        let targetURL = URL(fileURLWithPath: target)
-        let targetParent = targetURL.deletingLastPathComponent().path
-        if let perms = createWithPerms {
-            try mkdirAll(targetParent, perms)
-        }
-
-        // Check if this is a file bind mount (signaled by "arca-file-bind" option)
-        // For file bind mounts, create an empty file at the target instead of a directory
-        let isFileBindMount = self.options.contains("arca-file-bind")
-        if isFileBindMount {
-            // Create parent directory if needed
-            try mkdirAll(targetParent, 0o755)
-            // Create empty file at target
-            if !FileManager.default.fileExists(atPath: target) {
-                _ = FileManager.default.createFile(atPath: target, contents: nil)
+        // When targetResolved is true, the target path has already been securely
+        // resolved and the mount point created by secureResolveInRoot. Skip
+        // directory/file creation to avoid following symlinks in the target path.
+        if !targetResolved {
+            let targetURL = URL(fileURLWithPath: target)
+            let targetParent = targetURL.deletingLastPathComponent().path
+            if let perms = createWithPerms {
+                try mkdirAll(targetParent, perms)
             }
-        } else {
-            try mkdirAll(target, 0o755)
+
+            // For bind mounts, check if the source is a file and create the target accordingly.
+            let isBindMount = (originalFlags & Int32(MS_BIND)) != 0
+            if isBindMount {
+                var sourceIsNonDir = false
+                var sourceStat = stat()
+                if stat(self.source, &sourceStat) == 0 {
+                    sourceIsNonDir = (sourceStat.st_mode & S_IFMT) != S_IFDIR
+                }
+
+                if sourceIsNonDir {
+                    // Create parent directories and touch the target file
+                    try mkdirAll(targetParent, 0o755)
+                    let fd = open(target, O_WRONLY | O_CREAT, 0o644)
+                    if fd >= 0 {
+                        close(fd)
+                    }
+                } else {
+                    try mkdirAll(target, 0o755)
+                }
+            } else {
+                try mkdirAll(target, 0o755)
+            }
         }
 
         if opts.flags & Int32(MS_REMOUNT) == 0 || !dataString.isEmpty {
-            fputs("[Mount.mountToTarget] calling mount() syscall...\n", stderr)
-            fflush(stderr)
-            let result = _mount(self.source, target, self.type, UInt(originalFlags), dataString)
-            if result != 0 {
-                let errCode = errno
-                fputs("[Mount.mountToTarget] mount FAILED: errno=\(errCode)\n", stderr)
-                fflush(stderr)
+            guard _mount(self.source, target, self.type, UInt(originalFlags), dataString) == 0 else {
                 throw Error.errno(
-                    errCode,
-                    "failed initial mount source=\(self.source) target=\(target) type=\(self.type) flags=\(originalFlags) data=\(dataString)"
+                    errno,
+                    "failed initial mount source=\(self.source) target=\(target) type=\(self.type) data=\(dataString)"
                 )
             }
-            fputs("[Mount.mountToTarget] mount SUCCESS\n", stderr)
-            fflush(stderr)
         }
 
         if opts.flags & propagationTypes != 0 {
@@ -222,25 +360,36 @@ extension Mount {
             }
         }
 
-        // Bind mounts require a remount to change read-only status
-        // Linux ignores the ro/rw flag on the initial bind mount
-        // Per mount(2) man page: "MS_REMOUNT flag can be used with MS_BIND to modify only the per-mount-point flags"
+        // ARCA PATCH: remount every bind mount, not only read-only ones.
+        //
+        // Upstream remounts only when MS_BIND and MS_RDONLY are both set. Linux ignores
+        // the ro/rw flag on the *initial* bind mount, so per-mount-point flags have to be
+        // applied by a follow-up MS_REMOUNT (mount(2): "MS_REMOUNT flag can be used with
+        // MS_BIND to modify only the per-mount-point flags"). That is also true when the
+        // source filesystem is mounted read-only and the bind is expected to be writable,
+        // which upstream's condition does not cover.
+        //
+        // Kept through the upstream merge deliberately: upstream has not changed this
+        // logic since the merge base, so it is not superseded. Revisit under roadmap P8.2
+        // as either an upstream contribution or a documented permanent patch.
         if originalFlags & Int32(MS_BIND) != 0 {
-            // First remount: Use MS_BIND | MS_REMOUNT to modify per-mount-point flags
-            // Keep original flags (including MS_BIND) but exclude MS_REC
+            // Apply the per-mount-point flags, preserving MS_BIND but dropping MS_REC so
+            // only this mount point is affected.
             let firstRemountFlags = (originalFlags & ~Int32(MS_REC)) | Int32(MS_REMOUNT)
-            var result = _mount("", target, "", UInt(firstRemountFlags), "")
-            if result != 0 {
+            guard _mount("", target, "", UInt(firstRemountFlags), "") == 0 else {
                 throw Error.errno(errno, "failed first bind mount remount flags=\(firstRemountFlags)")
             }
 
-            // Second remount: Use just MS_REMOUNT to ensure writable (if not read-only)
+            // If the mount is meant to be writable, a second plain MS_REMOUNT clears a
+            // read-only flag inherited from the source filesystem.
+            //
+            // Non-fatal, preserving the pre-merge fork behaviour verbatim: the first
+            // remount is often sufficient and this one fails benignly on mounts that were
+            // already writable. Swallowing the errno is nonetheless wrong — it should
+            // either be logged or narrowed to the expected errno. Deliberately left
+            // unchanged here so this merge alters no behaviour; tracked as follow-up.
             if originalFlags & Int32(MS_RDONLY) == 0 {
-                let secondRemountFlags = Int32(MS_REMOUNT)
-                result = _mount("", target, "", UInt(secondRemountFlags), "")
-                if result != 0 {
-                    // Don't fail here - the first remount may have been sufficient
-                }
+                _ = _mount("", target, "", UInt(Int32(MS_REMOUNT)), "")
             }
         }
     }

@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright © 2025 Apple Inc. and the Containerization project authors.
+// Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,7 +15,6 @@
 //===----------------------------------------------------------------------===//
 
 import ContainerizationOS
-import Foundation
 
 extension Vminitd {
     /// Enable Rosetta's x86_64 emulation.

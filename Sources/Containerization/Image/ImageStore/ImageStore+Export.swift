@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright © 2025 Apple Inc. and the Containerization project authors.
+// Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -40,7 +40,7 @@ extension ImageStore {
         }
 
         @discardableResult
-        public func export(index: Descriptor, platforms: (Platform) -> Bool) async throws -> Descriptor {
+        public func export(index: Descriptor, platforms: (Platform) -> Bool, filter: (Descriptor) -> Bool = { _ in true }) async throws -> Descriptor {
             var pushQueue: [[Descriptor]] = []
             var current: [Descriptor] = [index]
             while !current.isEmpty {
@@ -61,9 +61,9 @@ extension ImageStore {
             try await withThrowingTaskGroup(of: Void.self) { group in
                 for layerGroup in pushQueue.reversed() {
                     for chunk in layerGroup.chunks(ofCount: 8) {
-                        for desc in chunk {
+                        for desc in chunk.filter(filter) {
                             guard let content = try await self.contentStore.get(digest: desc.digest) else {
-                                throw ContainerizationError(.notFound, message: "Content with digest \(desc.digest)")
+                                throw ContainerizationError(.notFound, message: "content with digest \(desc.digest)")
                             }
                             group.addTask {
                                 let readStream = try ReadStream(url: content.path)
@@ -78,8 +78,11 @@ extension ImageStore {
             // Lastly, we need to construct and push a new index, since we may
             // have pushed content only for specific platforms.
             let digest = SHA256.hash(data: localIndexData)
+            // The descriptor's mediaType becomes the HTTP Content-Type in
+            // RegistryClient.push and must match the mediaType field inside
+            // localIndexData. Registries reject mismatches with MANIFEST_INVALID.
             let descriptor = Descriptor(
-                mediaType: MediaTypes.index,
+                mediaType: index.mediaType,
                 digest: digest.digestString,
                 size: Int64(localIndexData.count))
             let stream = ReadStream(data: localIndexData)
@@ -91,20 +94,20 @@ extension ImageStore {
             for layerGroup in pushQueue {
                 for desc in layerGroup {
                     await progress?([
-                        ProgressEvent(event: "add-total-size", value: desc.size),
-                        ProgressEvent(event: "add-total-items", value: 1),
+                        .addTotalSize(desc.size),
+                        .addTotalItems(1),
                     ])
                 }
             }
             await progress?([
-                ProgressEvent(event: "add-total-size", value: localIndexData.count),
-                ProgressEvent(event: "add-total-items", value: 1),
+                .addTotalSize(Int64(localIndexData.count)),
+                .addTotalItems(1),
             ])
         }
 
         private func createIndex(from index: Descriptor, matching: (Platform) -> Bool) async throws -> Data {
             guard let content = try await self.contentStore.get(digest: index.digest) else {
-                throw ContainerizationError(.notFound, message: "Content with digest \(index.digest)")
+                throw ContainerizationError(.notFound, message: "content with digest \(index.digest)")
             }
             var idx: Index = try content.decode()
             let manifests = idx.manifests
@@ -135,15 +138,15 @@ extension ImageStore {
                 }
                 try await client.push(name: name, ref: tag, descriptor: descriptor, streamGenerator: generator, progress: progress)
                 await progress?([
-                    ProgressEvent(event: "add-size", value: descriptor.size),
-                    ProgressEvent(event: "add-items", value: 1),
+                    .addSize(descriptor.size),
+                    .addItems(1),
                 ])
             } catch let err as ContainerizationError {
                 guard err.code != .exists else {
                     // We reported the total items and size and have to account for them in existing content.
                     await progress?([
-                        ProgressEvent(event: "add-size", value: descriptor.size),
-                        ProgressEvent(event: "add-items", value: 1),
+                        .addSize(descriptor.size),
+                        .addItems(1),
                     ])
                     return
                 }
@@ -156,7 +159,7 @@ extension ImageStore {
             for desc in descs {
                 let mediaType = desc.mediaType
                 guard let content = try await self.contentStore.get(digest: desc.digest) else {
-                    throw ContainerizationError(.notFound, message: "Content with digest \(desc.digest)")
+                    throw ContainerizationError(.notFound, message: "content with digest \(desc.digest)")
                 }
                 switch mediaType {
                 case MediaTypes.index, MediaTypes.dockerManifestList:

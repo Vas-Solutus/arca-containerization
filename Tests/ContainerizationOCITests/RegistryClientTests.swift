@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright © 2025 Apple Inc. and the Containerization project authors.
+// Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -91,7 +91,7 @@ struct OCIClientTests: ~Copyable {
             throw error!
         }
         #expect(status == .unauthorized)
-        #expect(reason == "Access denied or wrong credentials")
+        #expect(reason == "access denied or wrong credentials")
     }
 
     @Test(.enabled(if: hasRegistryCredentials))
@@ -199,7 +199,7 @@ struct OCIClientTests: ~Copyable {
                     buffer.withUnsafeReadableBytes { pointer in
                         let unsafeBufferPointer = pointer.bindMemory(to: UInt8.self)
                         if let addr = unsafeBufferPointer.baseAddress {
-                            outputStream!.write(addr, maxLength: buffer.readableBytes)
+                            _ = outputStream!.write(addr, maxLength: buffer.readableBytes)
                         }
                     }
                 }

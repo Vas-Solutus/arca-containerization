@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright © 2025 Apple Inc. and the Containerization project authors.
+// Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -61,12 +61,19 @@ struct Application: AsyncParsableCommand {
         commandName: "cctl",
         abstract: "Utility CLI for Containerization",
         version: "2.0.0",
-        subcommands: [
-            Images.self,
-            Login.self,
-            Rootfs.self,
-            Run.self,
-        ]
+        subcommands: {
+            var commands: [any ParsableCommand.Type] = [
+                Rootfs.self,
+                Images.self,
+                Run.self,
+            ]
+            #if os(macOS)
+            commands.append(Login.self)
+            #elseif os(Linux)
+            commands.append(Bridge.self)
+            #endif
+            return commands
+        }()
     )
 }
 

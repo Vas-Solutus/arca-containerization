@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright © 2025 Apple Inc. and the Containerization project authors.
+// Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,24 +14,37 @@
 // limitations under the License.
 //===----------------------------------------------------------------------===//
 
-#if os(macOS)
+import ContainerizationArchive
 import ContainerizationError
 import ContainerizationExtras
 import ContainerizationOCI
+import ContainerizationOS
 import Foundation
 import Logging
 import Synchronization
+import SystemPackage
 
 import struct ContainerizationOS.Terminal
 
 /// `LinuxContainer` is an easy to use type for launching and managing the
 /// full lifecycle of a Linux container ran inside of a virtual machine.
 public final class LinuxContainer: Container, Sendable {
+    public static let maxIDLength = 64
+
     /// The identifier of the container.
     public let id: String
 
     /// Rootfs for the container.
+    ///
+    /// Note: The `destination` field of this mount is ignored as mounting is handled internally.
     public let rootfs: Mount
+
+    /// Optional writable layer for the container. When provided, the rootfs
+    /// is mounted as the lower layer of an overlayfs, with this as the upper layer.
+    /// All writes will go to this layer instead of the rootfs.
+    ///
+    /// Note: The `destination` field of this mount is ignored as mounting is handled internally.
+    public let writableLayer: Mount?
 
     /// Configuration for the container.
     public let config: Configuration
@@ -45,7 +58,7 @@ public final class LinuxContainer: Container, Sendable {
         /// The memory in bytes to give to the container.
         public var memoryInBytes: UInt64 = 1024.mib()
         /// The hostname for the container.
-        public var hostname: String = ""
+        public var hostname: String?
         /// The system control options for the container.
         public var sysctl: [String: String] = [:]
         /// The network interfaces for the container.
@@ -54,6 +67,16 @@ public final class LinuxContainer: Container, Sendable {
         public var sockets: [UnixSocketConfiguration] = []
         /// The mounts for the container.
         public var mounts: [Mount] = LinuxContainer.defaultMounts()
+        /// Paths inside the container that vmexec hides from the workload.
+        /// Defaults to the OCI standard set (``LinuxContainer/defaultMaskedPaths()``),
+        /// matching the restricted capability baseline. Set to `[]` to opt out,
+        /// or append to extend it.
+        public var maskedPaths: [String] = LinuxContainer.defaultMaskedPaths()
+        /// Paths inside the container that vmexec marks read-only.
+        /// Defaults to the OCI standard set (``LinuxContainer/defaultReadonlyPaths()``),
+        /// matching the restricted capability baseline. Set to `[]` to opt out,
+        /// or append to extend it.
+        public var readonlyPaths: [String] = LinuxContainer.defaultReadonlyPaths()
         /// The DNS configuration for the container.
         public var dns: DNS?
         /// The hosts to add to /etc/hosts for the container.
@@ -73,6 +96,16 @@ public final class LinuxContainer: Container, Sendable {
         /// If nil or empty, a new namespace will be created.
         /// Format: /run/netns/arca-{containerID} for WireGuard networking.
         public var networkNamespacePath: String?
+        /// Run the container with a minimal init process that handles signal
+        /// forwarding and zombie reaping.
+        public var useInit: Bool = false
+        /// Additional CPU cores to allocate for the virtual machine on top
+        /// of the container's configured `cpus` value.
+        public var cpuOverhead: Int = 1
+        /// Additional memory in bytes to allocate for the virtual machine
+        /// on top of the container's configured `memoryInBytes` value.
+        /// The total is aligned to a 1 MiB boundary.
+        public var memoryOverhead: UInt64 = 128.mib()
 
         public init() {}
 
@@ -80,16 +113,21 @@ public final class LinuxContainer: Container, Sendable {
             process: LinuxProcessConfiguration,
             cpus: Int = 4,
             memoryInBytes: UInt64 = 1024.mib(),
-            hostname: String = "",
+            hostname: String? = nil,
             sysctl: [String: String] = [:],
             interfaces: [any Interface] = [],
             sockets: [UnixSocketConfiguration] = [],
             mounts: [Mount] = LinuxContainer.defaultMounts(),
+            maskedPaths: [String] = LinuxContainer.defaultMaskedPaths(),
+            readonlyPaths: [String] = LinuxContainer.defaultReadonlyPaths(),
             dns: DNS? = nil,
             hosts: Hosts? = nil,
             virtualization: Bool = false,
             bootLog: BootLog? = nil,
-            ociRuntimePath: String? = nil
+            ociRuntimePath: String? = nil,
+            useInit: Bool = false,
+            cpuOverhead: Int = 1,
+            memoryOverhead: UInt64 = 128.mib()
         ) {
             self.process = process
             self.cpus = cpus
@@ -99,11 +137,16 @@ public final class LinuxContainer: Container, Sendable {
             self.interfaces = interfaces
             self.sockets = sockets
             self.mounts = mounts
+            self.maskedPaths = maskedPaths
+            self.readonlyPaths = readonlyPaths
             self.dns = dns
             self.hosts = hosts
             self.virtualization = virtualization
             self.bootLog = bootLog
             self.ociRuntimePath = ociRuntimePath
+            self.useInit = useInit
+            self.cpuOverhead = cpuOverhead
+            self.memoryOverhead = memoryOverhead
         }
     }
 
@@ -116,6 +159,9 @@ public final class LinuxContainer: Container, Sendable {
     // Ports we request the guest to allocate for unix socket relays from
     // the host.
     private let guestVsockPorts: Atomic<UInt32>
+
+    // Queue for copy IO.
+    private let copyQueue = DispatchQueue(label: "com.apple.containerization.copy")
 
     private enum State: Sendable {
         /// The container class has been created but no live resources are running.
@@ -134,6 +180,7 @@ public final class LinuxContainer: Container, Sendable {
         struct CreatedState: Sendable {
             let vm: any VirtualMachineInstance
             let relayManager: UnixSocketRelayManager
+            var fileMountContext: FileMountContext
         }
 
         struct StartedState: Sendable {
@@ -141,12 +188,14 @@ public final class LinuxContainer: Container, Sendable {
             let process: LinuxProcess
             let relayManager: UnixSocketRelayManager
             var vendedProcesses: [String: LinuxProcess]
+            let fileMountContext: FileMountContext
 
             init(_ state: CreatedState, process: LinuxProcess) {
                 self.vm = state.vm
                 self.relayManager = state.relayManager
                 self.process = process
                 self.vendedProcesses = [:]
+                self.fileMountContext = state.fileMountContext
             }
 
             init(_ state: PausedState) {
@@ -154,6 +203,7 @@ public final class LinuxContainer: Container, Sendable {
                 self.relayManager = state.relayManager
                 self.process = state.process
                 self.vendedProcesses = state.vendedProcesses
+                self.fileMountContext = state.fileMountContext
             }
         }
 
@@ -162,12 +212,14 @@ public final class LinuxContainer: Container, Sendable {
             let relayManager: UnixSocketRelayManager
             let process: LinuxProcess
             var vendedProcesses: [String: LinuxProcess]
+            let fileMountContext: FileMountContext
 
             init(_ state: StartedState) {
                 self.vm = state.vm
                 self.relayManager = state.relayManager
                 self.process = state.process
                 self.vendedProcesses = state.vendedProcesses
+                self.fileMountContext = state.fileMountContext
             }
         }
 
@@ -230,6 +282,24 @@ public final class LinuxContainer: Container, Sendable {
         mutating func setErrored(error: Swift.Error) {
             self = .errored(error)
         }
+
+        func vm(_ operation: String) throws -> any VirtualMachineInstance {
+            switch self {
+            case .created(let state):
+                return state.vm
+            case .started(let state):
+                return state.vm
+            case .paused(let state):
+                return state.vm
+            case .errored(let err):
+                throw err
+            default:
+                throw ContainerizationError(
+                    .invalidState,
+                    message: "failed to \(operation): container must be created, running, or paused"
+                )
+            }
+        }
     }
 
     private let vmm: VirtualMachineManager
@@ -240,28 +310,31 @@ public final class LinuxContainer: Container, Sendable {
     /// - Parameters:
     ///   - id: The identifier for the container.
     ///   - rootfs: The root filesystem mount containing the container image contents.
+    ///     The `destination` field is ignored as mounting is handled internally.
+    ///   - writableLayer: Optional writable layer mount. When provided, an overlayfs is used with
+    ///     rootfs as the lower layer and this as the upper layer. Must be a block device.
+    ///     The `destination` field is ignored as mounting is handled internally.
     ///   - vmm: The virtual machine manager that will handle launching the VM for the container.
     ///   - logger: Optional logger for container operations.
     ///   - configuration: A closure that configures the container by modifying the Configuration instance.
-    public init(
+    public convenience init(
         _ id: String,
         rootfs: Mount,
+        writableLayer: Mount? = nil,
         vmm: VirtualMachineManager,
         logger: Logger? = nil,
         configuration: (inout Configuration) throws -> Void
     ) throws {
-        self.id = id
-        self.vmm = vmm
-        self.hostVsockPorts = Atomic<UInt32>(0x1000_0000)
-        self.guestVsockPorts = Atomic<UInt32>(0x1000_0000)
-        self.rootfs = rootfs
-        self.logger = logger
-
         var config = Configuration()
         try configuration(&config)
-
-        self.config = config
-        self.state = AsyncMutex(.initialized)
+        try self.init(
+            id,
+            rootfs: rootfs,
+            writableLayer: writableLayer,
+            vmm: vmm,
+            configuration: config,
+            logger: logger
+        )
     }
 
     /// Create a new `LinuxContainer`.
@@ -269,25 +342,44 @@ public final class LinuxContainer: Container, Sendable {
     /// - Parameters:
     ///   - id: The identifier for the container.
     ///   - rootfs: The root filesystem mount containing the container image contents.
+    ///     The `destination` field is ignored as mounting is handled internally.
+    ///   - writableLayer: Optional writable layer mount. When provided, an overlayfs is used with
+    ///     rootfs as the lower layer and this as the upper layer. Must be a block device.
+    ///     The `destination` field is ignored as mounting is handled internally.
     ///   - vmm: The virtual machine manager that will handle launching the VM for the container.
     ///   - configuration: The container configuration specifying process, resources, networking, and other settings.
     ///   - logger: Optional logger for container operations.
     public init(
         _ id: String,
         rootfs: Mount,
+        writableLayer: Mount? = nil,
         vmm: VirtualMachineManager,
         configuration: LinuxContainer.Configuration,
         logger: Logger? = nil
-    ) {
+    ) throws {
+        guard id.count <= Self.maxIDLength else {
+            throw ContainerizationError(
+                .invalidArgument,
+                message: "container id length \(id.count) exceeds maximum of \(Self.maxIDLength) characters"
+            )
+        }
+        if let writableLayer {
+            guard writableLayer.isBlock else {
+                throw ContainerizationError(
+                    .invalidArgument,
+                    message: "writableLayer must be a block device"
+                )
+            }
+        }
         self.id = id
         self.vmm = vmm
         self.hostVsockPorts = Atomic<UInt32>(0x1000_0000)
         self.guestVsockPorts = Atomic<UInt32>(0x1000_0000)
-        self.rootfs = rootfs
         self.logger = logger
-
         self.config = configuration
         self.state = AsyncMutex(.initialized)
+        self.rootfs = rootfs
+        self.writableLayer = writableLayer
     }
 
     private static func createDefaultRuntimeSpec(_ id: String) -> Spec {
@@ -311,11 +403,26 @@ public final class LinuxContainer: Container, Sendable {
         // Process toggles.
         spec.process = config.process.toOCI()
 
+        // Wrap with init process if requested.
+        if config.useInit {
+            let originalArgs = spec.process?.args ?? []
+            spec.process?.args = ["/.cz-init", "--"] + originalArgs
+        }
+
         // General toggles.
-        spec.hostname = config.hostname
+        if let hostname = config.hostname {
+            spec.hostname = hostname
+        }
 
         // Linux toggles.
         spec.linux?.sysctl = config.sysctl
+        spec.linux?.maskedPaths = config.maskedPaths
+        spec.linux?.readonlyPaths = config.readonlyPaths
+
+        // If the rootfs was requested as read-only, set it in the OCI spec.
+        // We let the OCI runtime remount as ro, instead of doing it originally.
+        // However, if we have a writable layer, the overlay allows writes so we don't mark it read-only.
+        spec.root?.readonly = self.rootfs.options.contains("ro") && self.writableLayer == nil
 
         // Resource limits.
         // CPU: quota/period model where period is 100ms (100,000µs) and quota is cpus * period
@@ -363,6 +470,44 @@ public final class LinuxContainer: Container, Sendable {
         ]
     }
 
+    /// The default set of paths to mask inside a container, matching the OCI
+    /// runtime spec defaults that runc and other production runtimes apply.
+    /// Each path is hidden from the workload (replaced by `/dev/null` for files
+    /// or an empty tmpfs for directories) by `vmexec` after `pivot_root`.
+    ///
+    /// Applied by default (see ``Configuration/maskedPaths``); set
+    /// `config.maskedPaths = []` to opt out, or append to extend the set.
+    public static func defaultMaskedPaths() -> [String] {
+        [
+            "/proc/asound",
+            "/proc/acpi",
+            "/proc/kcore",
+            "/proc/keys",
+            "/proc/latency_stats",
+            "/proc/timer_list",
+            "/proc/timer_stats",
+            "/proc/sched_debug",
+            "/proc/scsi",
+            "/sys/firmware",
+            "/sys/devices/virtual/powercap",
+        ]
+    }
+
+    /// The default set of paths to mark read-only inside a container, matching
+    /// the OCI runtime spec defaults that runc and other production runtimes apply.
+    ///
+    /// Applied by default (see ``Configuration/readonlyPaths``); set
+    /// `config.readonlyPaths = []` to opt out, or append to extend the set.
+    public static func defaultReadonlyPaths() -> [String] {
+        [
+            "/proc/bus",
+            "/proc/fs",
+            "/proc/irq",
+            "/proc/sys",
+            "/proc/sysrq-trigger",
+        ]
+    }
+
     /// A more traditional default set of mounts that OCI runtimes typically employ.
     public static func defaultOCIMounts() -> [Mount] {
         let defaultOptions = ["nosuid", "noexec", "nodev"]
@@ -379,6 +524,10 @@ public final class LinuxContainer: Container, Sendable {
 
     private static func guestRootfsPath(_ id: String) -> String {
         "/run/container/\(id)/rootfs"
+    }
+
+    private static func guestSocketStagingPath(_ socketID: String) -> String {
+        "/run/sockets/\(socketID).sock"
     }
 }
 
@@ -403,6 +552,67 @@ extension LinuxContainer {
         config.interfaces
     }
 
+    private func mountRootfs(
+        attachments: [AttachedFilesystem],
+        rootfsPath: String,
+        agent: VirtualMachineAgent
+    ) async throws {
+        guard let rootfsAttachment = attachments.first else {
+            throw ContainerizationError(.notFound, message: "rootfs mount not found")
+        }
+
+        if self.writableLayer != nil {
+            // Set up overlayfs with image as lower layer and writable layer as upper.
+            guard attachments.count >= 2 else {
+                throw ContainerizationError(
+                    .notFound,
+                    message: "writable layer mount not found"
+                )
+            }
+            let writableAttachment = attachments[1]
+
+            let lowerPath = "/run/container/\(self.id)/lower"
+            let upperMountPath = "/run/container/\(self.id)/upper"
+            let upperPath = "/run/container/\(self.id)/upper/diff"
+            let workPath = "/run/container/\(self.id)/upper/work"
+
+            // Mount the image (lower layer) as read-only.
+            var lowerMount = rootfsAttachment.to
+            lowerMount.destination = lowerPath
+            if !lowerMount.options.contains("ro") {
+                lowerMount.options.append("ro")
+            }
+            try await agent.mount(lowerMount)
+
+            // Mount the writable layer.
+            var upperMount = writableAttachment.to
+            upperMount.destination = upperMountPath
+            try await agent.mount(upperMount)
+
+            // Create the upper and work directories inside the writable layer.
+            try await agent.mkdir(path: upperPath, all: true, perms: 0o755)
+            try await agent.mkdir(path: workPath, all: true, perms: 0o755)
+
+            // Mount the overlay.
+            let overlayMount = ContainerizationOCI.Mount(
+                type: "overlay",
+                source: "overlay",
+                destination: rootfsPath,
+                options: [
+                    "lowerdir=\(lowerPath)",
+                    "upperdir=\(upperPath)",
+                    "workdir=\(workPath)",
+                ]
+            )
+            try await agent.mount(overlayMount)
+        } else {
+            // No writable layer. Mount rootfs directly.
+            var rootfs = rootfsAttachment.to
+            rootfs.destination = rootfsPath
+            try await agent.mount(rootfs)
+        }
+    }
+
     /// Create and start the underlying container's virtual machine
     /// and set up the runtime environment. The container's init process
     /// is NOT running afterwards.
@@ -410,11 +620,36 @@ extension LinuxContainer {
         try await self.state.withLock { state in
             try state.validateForCreate()
 
+            // This is a bit of an annoyance, but because the type we use for the rootfs is simply
+            // the same Mount type we use for non-rootfs mounts, it's possible someone passed 'ro'
+            // in the options (which should be perfectly valid). However, the problem is when we go to
+            // setup /etc/hosts and /etc/resolv.conf, as we'd get EROFS if they did supply 'ro'.
+            // To remedy this, remove any "ro" options before passing to VZ. Having the OCI runtime
+            // remount "ro" (which is what we do later in the guest) is truthfully the right thing,
+            // but this bit here is just a tad awkward.
+            var modifiedRootfs = self.rootfs
+            modifiedRootfs.options.removeAll(where: { $0 == "ro" })
+
+            let vmMemory = self.memoryInBytes + self.config.memoryOverhead
+
+            let vmCpus = self.cpus + self.config.cpuOverhead
+
+            // Prepare file mounts. This transforms single-file mounts into directory shares.
+            let fileMountContext = try FileMountContext.prepare(mounts: self.config.mounts)
+            // This is dumb, but alas.
+            let fileMountContextHolder = Mutex<FileMountContext>(fileMountContext)
+
+            // Build the list of mounts to attach to the VM.
+            var containerMounts = [modifiedRootfs] + fileMountContext.transformedMounts
+            if let writableLayer = self.writableLayer {
+                containerMounts.insert(writableLayer, at: 1)
+            }
+
             let vmConfig = VMConfiguration(
-                cpus: self.cpus,
-                memoryInBytes: self.memoryInBytes,
+                cpus: vmCpus,
+                memoryInBytes: vmMemory,
                 interfaces: self.interfaces,
-                mountsByID: [self.id: [self.rootfs] + self.config.mounts],
+                mountsByID: [self.id: containerMounts],
                 bootLog: self.config.bootLog,
                 nestedVirtualization: self.config.virtualization
             )
@@ -424,16 +659,74 @@ extension LinuxContainer {
 
             try await vm.start()
             do {
+                let mountsForAgent = containerMounts
                 try await vm.withAgent { agent in
                     try await agent.standardSetup()
 
-                    // Mount the rootfs.
-                    guard let attachments = vm.mounts[self.id], let rootfsAttachment = attachments.first else {
+                    // Mount the unified virtiofs share at /run/virtiofs only
+                    // when at least one of the container's mounts is virtiofs
+                    // — the bind-mount transform below derives its sources
+                    // from /run/virtiofs/{tag}, so the unified share is only
+                    // load-bearing when there are virtiofs mounts. The macOS
+                    // VZ backend always exposes the virtiofs device (even
+                    // with zero shares), but the cloud-hypervisor backend
+                    // only spawns virtiofsd when shares exist; mounting an
+                    // unbacked tag fails with EINVAL.
+                    let hasVirtiofsMount = mountsForAgent.contains { mount in
+                        if case .virtiofs = mount.runtimeOptions { return true }
+                        return false
+                    }
+                    if hasVirtiofsMount {
+                        // VZ exposes ONE virtio-fs device with tag "virtiofs"
+                        // and multiple sources as subdirs (VZMultipleDirectoryShare).
+                        // The CH backend exposes one device per source-hash
+                        // tag instead, so the guest must mount each tag
+                        // separately at /run/virtiofs/<tag>. The bind-mount
+                        // transform below uses /run/virtiofs/<tag> in both
+                        // cases, so this branch is only about how /run/virtiofs
+                        // gets populated.
+                        if vm.virtiofsLayout == .perTag {
+                            try await agent.mkdir(path: "/run/virtiofs", all: true, perms: 0o755)
+                            let virtiofsAttachments = (vm.mounts[self.id] ?? []).filter { $0.type == "virtiofs" }
+                            let uniqueTags = Set(virtiofsAttachments.map(\.source))
+                            for tag in uniqueTags {
+                                let dest = "/run/virtiofs/\(tag)"
+                                try await agent.mkdir(path: dest, all: true, perms: 0o755)
+                                try await agent.mount(
+                                    ContainerizationOCI.Mount(
+                                        type: "virtiofs",
+                                        source: tag,
+                                        destination: dest,
+                                        options: []
+                                    ))
+                            }
+                        } else {
+                            try await agent.mount(
+                                ContainerizationOCI.Mount(
+                                    type: "virtiofs",
+                                    source: "virtiofs",
+                                    destination: "/run/virtiofs",
+                                    options: []
+                                ))
+                        }
+                    }
+
+                    guard let attachments = vm.mounts[self.id] else {
                         throw ContainerizationError(.notFound, message: "rootfs mount not found")
                     }
-                    var rootfs = rootfsAttachment.to
-                    rootfs.destination = Self.guestRootfsPath(self.id)
-                    try await agent.mount(rootfs)
+                    let rootfsPath = Self.guestRootfsPath(self.id)
+                    try await self.mountRootfs(attachments: attachments, rootfsPath: rootfsPath, agent: agent)
+
+                    // Mount file mount holding directories under /run.
+                    if fileMountContext.hasFileMounts {
+                        let containerMounts = vm.mounts[self.id] ?? []
+                        var ctx = fileMountContextHolder.withLock { $0 }
+                        try await ctx.mountHoldingDirectories(
+                            vmMounts: containerMounts,
+                            agent: agent
+                        )
+                        fileMountContextHolder.withLock { $0 = ctx }
+                    }
 
                     // Start up our friendly unix socket relays.
                     for socket in self.config.sockets {
@@ -447,26 +740,29 @@ extension LinuxContainer {
                     // For every interface asked for:
                     // 1. Add the address requested
                     // 2. Online the adapter
-                    // 3. If a gateway IP address is present, add the default route.
+                    // 3. For the first interface, add the default route
+                    var defaultRouteSet = false
                     for (index, i) in self.interfaces.enumerated() {
                         let name = "eth\(index)"
-                        try await agent.addressAdd(name: name, address: i.address)
-                        try await agent.up(name: name, mtu: 1280)
-                        if let gateway = i.gateway {
-                            try await agent.routeAddDefault(name: name, gateway: gateway)
-                        }
+                        try await agent.setupInterface(
+                            i,
+                            name: name,
+                            setDefaultRoute: !defaultRouteSet,
+                            logger: self.logger
+                        )
+                        defaultRouteSet = true
                     }
 
                     // Setup /etc/resolv.conf and /etc/hosts if asked for.
                     if let dns = self.config.dns {
-                        try await agent.configureDNS(config: dns, location: rootfs.destination)
+                        try await agent.configureDNS(config: dns, location: rootfsPath)
                     }
                     if let hosts = self.config.hosts {
-                        try await agent.configureHosts(config: hosts, location: rootfs.destination)
+                        try await agent.configureHosts(config: hosts, location: rootfsPath)
                     }
 
                 }
-                state = .created(.init(vm: vm, relayManager: relayManager))
+                state = .created(.init(vm: vm, relayManager: relayManager, fileMountContext: fileMountContextHolder.withLock { $0 }))
             } catch {
                 try? await relayManager.stopAll()
                 try? await vm.stop()
@@ -484,17 +780,61 @@ extension LinuxContainer {
             let agent = try await createdState.vm.dialAgent()
             do {
                 var spec = self.generateRuntimeSpec()
-                // We don't need the rootfs, nor do OCI runtimes want it included.
-                // Also filter out block device mounts (/dev/vdb, /dev/vdc, etc.) - these are
-                // mounted by vminitd during boot for OverlayFS, not by vmexec
+                // We don't need the rootfs (or writable layer), nor do OCI runtimes want it included.
+                // Also filter out file mount holding directories. We'll mount those separately under /run.
+                // Transform virtiofs mounts to bind mounts from /run/virtiofs/{tag}
+                // ARCA: block device mounts (/dev/vdb, /dev/vdc, ...) are also filtered out.
                 let containerMounts = createdState.vm.mounts[self.id] ?? []
-                spec.mounts = containerMounts.dropFirst().compactMap { mount in
-                    // Skip block device mounts - they're infrastructure for OverlayFS
-                    if mount.source.hasPrefix("/dev/vd") && mount.source != "/dev" {
-                        return nil
+                let holdingTags = createdState.fileMountContext.holdingDirectoryTags
+                // Drop rootfs, and writable layer if present.
+                let mountsToSkip = self.writableLayer != nil ? 2 : 1
+                var mounts: [ContainerizationOCI.Mount] =
+                    containerMounts.dropFirst(mountsToSkip)
+                    .filter { !holdingTags.contains($0.source) }
+                    // ARCA PATCH: skip OverlayFS layer block devices. They are mounted by vminitd
+                    // at boot (ArcaBoot.prepareOverlayFS), not by vmexec, and OCI runtimes must not
+                    // see them.
+                    .filter { !($0.source.hasPrefix("/dev/vd") && $0.source != "/dev") }
+                    .map { attached -> ContainerizationOCI.Mount in
+                        if attached.type == "virtiofs" {
+                            // Transform to bind mount from holding directory
+                            return ContainerizationOCI.Mount(
+                                type: "none",
+                                source: "/run/virtiofs/\(attached.source)",
+                                destination: attached.destination,
+                                options: ["bind"] + attached.options
+                            )
+                        }
+                        return attached.to
                     }
-                    return mount.to
+                    + createdState.fileMountContext.ociBindMounts()
+
+                // When useInit is enabled, bind mount vminitd from the VM's filesystem
+                // into the container so it can be executed.
+                if self.config.useInit {
+                    mounts.append(
+                        ContainerizationOCI.Mount(
+                            type: "bind",
+                            source: "/sbin/vminitd",
+                            destination: "/.cz-init",
+                            options: ["bind", "ro"]
+                        ))
                 }
+
+                // Bind mount staged sockets into the container. Sockets relayed
+                // .into the container are created in a staging directory outside
+                // the rootfs to avoid symlink traversal and mount shadowing.
+                for socket in self.config.sockets where socket.direction == .into {
+                    mounts.append(
+                        ContainerizationOCI.Mount(
+                            type: "bind",
+                            source: Self.guestSocketStagingPath(socket.id),
+                            destination: socket.destination.path,
+                            options: ["bind"]
+                        ))
+                }
+
+                spec.mounts = cleanAndSortMounts(mounts)
 
                 let stdio = IOUtil.setup(
                     portAllocator: self.hostVsockPorts,
@@ -525,46 +865,6 @@ extension LinuxContainer {
         }
     }
 
-    private static func setupIO(
-        portAllocator: borrowing Atomic<UInt32>,
-        stdin: ReaderStream?,
-        stdout: Writer?,
-        stderr: Writer?
-    ) -> LinuxProcess.Stdio {
-        var stdinSetup: LinuxProcess.StdioReaderSetup? = nil
-        if let reader = stdin {
-            let ret = portAllocator.wrappingAdd(1, ordering: .relaxed)
-            stdinSetup = .init(
-                port: ret.oldValue,
-                reader: reader
-            )
-        }
-
-        var stdoutSetup: LinuxProcess.StdioSetup? = nil
-        if let writer = stdout {
-            let ret = portAllocator.wrappingAdd(1, ordering: .relaxed)
-            stdoutSetup = LinuxProcess.StdioSetup(
-                port: ret.oldValue,
-                writer: writer
-            )
-        }
-
-        var stderrSetup: LinuxProcess.StdioSetup? = nil
-        if let writer = stderr {
-            let ret = portAllocator.wrappingAdd(1, ordering: .relaxed)
-            stderrSetup = LinuxProcess.StdioSetup(
-                port: ret.oldValue,
-                writer: writer
-            )
-        }
-
-        return LinuxProcess.Stdio(
-            stdin: stdinSetup,
-            stdout: stdoutSetup,
-            stderr: stderrSetup
-        )
-    }
-
     /// Stop the container from executing. This MUST be called even if wait() has returned
     /// as their are additional resources to free.
     public func stop() async throws {
@@ -574,12 +874,22 @@ extension LinuxContainer {
                 return
             }
 
-            let startedState = try state.startedState("stop")
-            let vm = startedState.vm
+            let vm: any VirtualMachineInstance
+            let relayManager: UnixSocketRelayManager
+
+            let startedState = try? state.startedState("stop")
+            if let startedState {
+                vm = startedState.vm
+                relayManager = startedState.relayManager
+            } else {
+                let createdState = try state.createdState("stop")
+                vm = createdState.vm
+                relayManager = createdState.relayManager
+            }
 
             var firstError: Error?
             do {
-                try await startedState.relayManager.stopAll()
+                try await relayManager.stopAll()
             } catch {
                 self.logger?.error("failed to stop relay manager: \(error)")
                 firstError = firstError ?? error
@@ -602,15 +912,17 @@ extension LinuxContainer {
                         }
                     }
 
-                    // Now lets ensure every process is donezo.
-                    try await agent.kill(pid: -1, signal: SIGKILL)
+                    if let _ = startedState {
+                        // Now lets ensure every process is donezo.
+                        try await agent.kill(pid: -1, signal: SIGKILL)
 
-                    // Wait on init proc exit. Give it 5 seconds of leeway.
-                    _ = try await agent.waitProcess(
-                        id: self.id,
-                        containerID: self.id,
-                        timeoutInSeconds: 5
-                    )
+                        // Wait on init proc exit. Give it 5 seconds of leeway.
+                        _ = try await agent.waitProcess(
+                            id: self.id,
+                            containerID: self.id,
+                            timeoutInSeconds: 5
+                        )
+                    }
 
                     // Today, we leave EBUSY looping and other fun logic up to the
                     // guest agent.
@@ -619,6 +931,14 @@ extension LinuxContainer {
                         flags: 0
                     )
 
+                    // If we have a writable layer, we also need to unmount the lower and upper layers.
+                    if self.writableLayer != nil {
+                        let upperPath = "/run/container/\(self.id)/upper"
+                        let lowerPath = "/run/container/\(self.id)/lower"
+                        try await agent.umount(path: upperPath, flags: 0)
+                        try await agent.umount(path: lowerPath, flags: 0)
+                    }
+
                     try await agent.sync()
                 }
             } catch {
@@ -626,20 +946,22 @@ extension LinuxContainer {
                 firstError = firstError ?? error
             }
 
-            for process in startedState.vendedProcesses.values {
+            if let startedState {
+                for process in startedState.vendedProcesses.values {
+                    do {
+                        try await process._delete()
+                    } catch {
+                        self.logger?.error("failed to delete process \(process.id): \(error)")
+                        firstError = firstError ?? error
+                    }
+                }
+
                 do {
-                    try await process._delete()
+                    try await startedState.process.delete()
                 } catch {
-                    self.logger?.error("failed to delete process \(process.id): \(error)")
+                    self.logger?.error("failed to delete init process: \(error)")
                     firstError = firstError ?? error
                 }
-            }
-
-            do {
-                try await startedState.process.delete()
-            } catch {
-                self.logger?.error("failed to delete init process: \(error)")
-                firstError = firstError ?? error
             }
 
             do {
@@ -658,7 +980,7 @@ extension LinuxContainer {
     }
 
     /// Send a signal to the container.
-    public func kill(_ signal: Int32) async throws {
+    public func kill(_ signal: Signal) async throws {
         try await self.state.withLock {
             let state = try $0.startedState("kill")
             try await state.process.kill(signal)
@@ -714,7 +1036,7 @@ extension LinuxContainer {
                 agent: agent,
                 vm: startedState.vm,
                 logger: self.logger,
-                onDelete: { [weak self] in
+                onDelete: { [weak self = self] in
                     await self?.removeProcess(id: id)
                 }
             )
@@ -751,7 +1073,7 @@ extension LinuxContainer {
                 agent: agent,
                 vm: state.vm,
                 logger: self.logger,
-                onDelete: { [weak self] in
+                onDelete: { [weak self = self] in
                     await self?.removeProcess(id: id)
                 }
             )
@@ -785,6 +1107,20 @@ extension LinuxContainer {
         }
     }
 
+    /// Provides scoped access to the underlying virtual machine instance.
+    ///
+    /// Most users should prefer the higher level APIs on ``LinuxContainer``
+    /// directly. This is intended for advanced use cases that need to interact
+    /// with the virtual machine outside of the container abstraction.
+    public func withVirtualMachineInstance<T: Sendable>(
+        _ fn: @Sendable (any VirtualMachineInstance) async throws -> T
+    ) async throws -> T {
+        let vm = try await self.state.withLock { state in
+            try state.vm("withVirtualMachineInstance")
+        }
+        return try await fn(vm)
+    }
+
     /// Close the containers standard input to signal no more input is
     /// arriving.
     public func closeStdin() async throws {
@@ -806,12 +1142,12 @@ extension LinuxContainer {
     }
 
     /// Get statistics for the container.
-    public func statistics() async throws -> ContainerStatistics {
+    public func statistics(categories: StatCategory = .all) async throws -> ContainerStatistics {
         try await self.state.withLock {
             let state = try $0.startedState("statistics")
 
             let stats = try await state.vm.withAgent { agent in
-                let allStats = try await agent.containerStatistics(containerIDs: [self.id])
+                let allStats = try await agent.containerStatistics(containerIDs: [self.id], categories: categories)
                 guard let containerStats = allStats.first else {
                     throw ContainerizationError(
                         .notFound,
@@ -825,18 +1161,16 @@ extension LinuxContainer {
         }
     }
 
-    /// Relay a unix socket from in the container to the host, or from the host
-    /// to inside the container.
-    public func relayUnixSocket(socket: UnixSocketConfiguration) async throws {
+    // Perform filesystem operations in the container.
+    public func filesystemOperation(operation: FilesystemOperation, path: String) async throws {
         try await self.state.withLock {
-            let state = try $0.startedState("relayUnixSocket")
-
+            let state = try $0.startedState("filesystemOperation")
             try await state.vm.withAgent { agent in
-                try await self.relayUnixSocket(
-                    socket: socket,
-                    relayManager: state.relayManager,
-                    agent: agent
-                )
+                guard let vminitd = agent as? Vminitd else {
+                    throw ContainerizationError(.unsupported, message: "filesystemOperation requires Vminitd agent")
+                }
+                let guestPath = URL(filePath: Self.guestRootfsPath(self.id)).appending(path: path).path
+                try await vminitd.filesystemOperation(operation: operation, path: guestPath)
             }
         }
     }
@@ -859,7 +1193,7 @@ extension LinuxContainer {
         let port: UInt32
         if socket.direction == .into {
             port = self.hostVsockPorts.wrappingAdd(1, ordering: .relaxed).oldValue
-            socket.destination = rootInGuest.appending(path: socket.destination.path)
+            socket.destination = URL(filePath: Self.guestSocketStagingPath(socket.id))
         } else {
             port = self.guestVsockPorts.wrappingAdd(1, ordering: .relaxed).oldValue
             socket.source = rootInGuest.appending(path: socket.source.path)
@@ -867,6 +1201,278 @@ extension LinuxContainer {
 
         try await relayManager.start(port: port, socket: socket)
         try await relayAgent.relaySocket(port: port, configuration: socket)
+    }
+
+    /// Default chunk size for file transfers (1MiB).
+    public static let defaultCopyChunkSize = 1024 * 1024
+
+    /// Copy a file or directory from the host into the container.
+    ///
+    /// Data transfer happens over a dedicated vsock connection. For directories,
+    /// the source is archived as tar+gzip and streamed directly through vsock
+    /// without intermediate temp files.
+    public func copyIn(
+        from source: URL,
+        to destination: URL,
+        mode: UInt32 = 0o644,
+        createParents: Bool = true,
+        chunkSize: Int = defaultCopyChunkSize
+    ) async throws {
+        try await self.state.withLock {
+            let state = try $0.startedState("copyIn")
+
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: source.path, isDirectory: &isDirectory) else {
+                throw ContainerizationError(.notFound, message: "copyIn: source not found '\(source.path)'")
+            }
+            let isArchive = isDirectory.boolValue
+
+            let guestPath: URL = try await state.vm.withAgent { agent in
+                guard let vminitd = agent as? Vminitd else {
+                    throw ContainerizationError(.unsupported, message: "copyIn requires Vminitd agent")
+                }
+
+                return try await self.resolveCopyInGuestPath(
+                    from: source,
+                    to: destination,
+                    sourceIsDirectory: isArchive,
+                    using: vminitd
+                )
+            }
+
+            let port = self.hostVsockPorts.wrappingAdd(1, ordering: .relaxed).oldValue
+            let listener = try state.vm.listen(port)
+
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    try await state.vm.withAgent { agent in
+                        guard let vminitd = agent as? Vminitd else {
+                            throw ContainerizationError(.unsupported, message: "copyIn requires Vminitd agent")
+                        }
+                        try await vminitd.copy(
+                            direction: .copyIn,
+                            guestPath: guestPath,
+                            vsockPort: port,
+                            mode: mode,
+                            createParents: createParents,
+                            isArchive: isArchive
+                        )
+                    }
+                }
+
+                group.addTask {
+                    guard let conn = await listener.first(where: { _ in true }) else {
+                        throw ContainerizationError(.internalError, message: "copyIn: vsock connection not established")
+                    }
+                    try listener.finish()
+
+                    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+                        self.copyQueue.async {
+                            do {
+                                defer { conn.closeFile() }
+
+                                if isArchive {
+                                    let writer = try ArchiveWriter(configuration: .init(format: .pax, filter: .gzip))
+                                    try writer.open(fileDescriptor: conn.fileDescriptor)
+                                    try writer.archiveDirectory(source)
+                                    try writer.finishEncoding()
+                                } else {
+                                    let srcFd = open(source.path, O_RDONLY)
+                                    guard srcFd != -1 else {
+                                        throw ContainerizationError(
+                                            .internalError,
+                                            message: "copyIn: failed to open '\(source.path)': \(String(cString: strerror(errno)))"
+                                        )
+                                    }
+                                    defer { close(srcFd) }
+
+                                    var buf = [UInt8](repeating: 0, count: chunkSize)
+                                    while true {
+                                        let n = read(srcFd, &buf, buf.count)
+                                        if n == 0 { break }
+                                        guard n > 0 else {
+                                            throw ContainerizationError(
+                                                .internalError,
+                                                message: "copyIn: read error: \(String(cString: strerror(errno)))"
+                                            )
+                                        }
+                                        var written = 0
+                                        while written < n {
+                                            let w = buf.withUnsafeBytes { ptr in
+                                                write(conn.fileDescriptor, ptr.baseAddress! + written, n - written)
+                                            }
+                                            guard w > 0 else {
+                                                throw ContainerizationError(
+                                                    .internalError,
+                                                    message: "copyIn: vsock write error: \(String(cString: strerror(errno)))"
+                                                )
+                                            }
+                                            written += w
+                                        }
+                                    }
+                                }
+                                continuation.resume()
+                            } catch {
+                                continuation.resume(throwing: error)
+                            }
+                        }
+                    }
+                }
+
+                try await group.waitForAll()
+            }
+        }
+    }
+
+    private func resolveCopyInGuestPath(
+        from source: URL,
+        to destination: URL,
+        sourceIsDirectory: Bool,
+        using vminitd: Vminitd
+    ) async throws -> URL {
+        let guestDestination = URL(filePath: self.root).appending(path: destination.path)
+
+        let stat: ContainerizationOS.Stat?
+        do {
+            stat = try await vminitd.stat(path: guestDestination)
+        } catch let error as ContainerizationError where error.code == .notFound {
+            stat = nil
+        }
+        // Any other error propagates so transport and permission failures are visible.
+
+        guard let stat else {
+            if destination.hasDirectoryPath && !sourceIsDirectory {
+                throw ContainerizationError(
+                    .invalidArgument,
+                    message: "destination directory does not exist: \(destination.path)"
+                )
+            }
+            return guestDestination
+        }
+
+        let destinationIsDirectory = (stat.mode & UInt32(S_IFMT)) == UInt32(S_IFDIR)
+        guard destinationIsDirectory else {
+            if sourceIsDirectory {
+                throw ContainerizationError(
+                    .invalidArgument,
+                    message: "cannot copy directory over existing file: \(destination.path)"
+                )
+            }
+            return guestDestination
+        }
+
+        return guestDestination.appendingPathComponent(source.lastPathComponent)
+    }
+
+    /// Copy a file or directory from the container to the host.
+    ///
+    /// Data transfer happens over a dedicated vsock connection. For directories,
+    /// the guest archives the source as tar+gzip and streams it directly through
+    /// vsock. The host extracts the archive without intermediate temp files.
+    public func copyOut(
+        from source: URL,
+        to destination: URL,
+        createParents: Bool = true,
+        chunkSize: Int = defaultCopyChunkSize
+    ) async throws {
+        try await self.state.withLock {
+            let state = try $0.startedState("copyOut")
+
+            if createParents {
+                let parentDir = destination.deletingLastPathComponent()
+                try FileManager.default.createDirectory(at: parentDir, withIntermediateDirectories: true)
+            }
+
+            let guestPath = URL(filePath: self.root).appending(path: source.path)
+            let port = self.hostVsockPorts.wrappingAdd(1, ordering: .relaxed).oldValue
+            let listener = try state.vm.listen(port)
+
+            let (metadataStream, metadataCont) = AsyncStream.makeStream(of: Vminitd.CopyMetadata.self)
+
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    try await state.vm.withAgent { agent in
+                        guard let vminitd = agent as? Vminitd else {
+                            throw ContainerizationError(.unsupported, message: "copyOut requires Vminitd agent")
+                        }
+                        try await vminitd.copy(
+                            direction: .copyOut,
+                            guestPath: guestPath,
+                            vsockPort: port,
+                            onMetadata: { meta in
+                                metadataCont.yield(meta)
+                                metadataCont.finish()
+                            }
+                        )
+                    }
+                }
+
+                group.addTask {
+                    guard let metadata = await metadataStream.first(where: { _ in true }) else {
+                        throw ContainerizationError(.internalError, message: "copyOut: no metadata received")
+                    }
+
+                    guard let conn = await listener.first(where: { _ in true }) else {
+                        throw ContainerizationError(.internalError, message: "copyOut: vsock connection not established")
+                    }
+                    try listener.finish()
+
+                    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+                        self.copyQueue.async {
+                            do {
+                                defer { conn.closeFile() }
+
+                                if metadata.isArchive {
+                                    try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+                                    let fh = FileHandle(fileDescriptor: dup(conn.fileDescriptor), closeOnDealloc: true)
+                                    let reader = try ArchiveReader(format: .pax, filter: .gzip, fileHandle: fh)
+                                    _ = try reader.extractContents(to: destination)
+                                } else {
+                                    let destFd = open(destination.path, O_WRONLY | O_CREAT | O_TRUNC, 0o644)
+                                    guard destFd != -1 else {
+                                        throw ContainerizationError(
+                                            .internalError,
+                                            message: "copyOut: failed to open '\(destination.path)': \(String(cString: strerror(errno)))"
+                                        )
+                                    }
+                                    defer { close(destFd) }
+
+                                    var buf = [UInt8](repeating: 0, count: chunkSize)
+                                    while true {
+                                        let n = read(conn.fileDescriptor, &buf, buf.count)
+                                        if n == 0 { break }
+                                        guard n > 0 else {
+                                            throw ContainerizationError(
+                                                .internalError,
+                                                message: "copyOut: vsock read error: \(String(cString: strerror(errno)))"
+                                            )
+                                        }
+                                        var written = 0
+                                        while written < n {
+                                            let w = buf.withUnsafeBytes { ptr in
+                                                write(destFd, ptr.baseAddress! + written, n - written)
+                                            }
+                                            guard w > 0 else {
+                                                throw ContainerizationError(
+                                                    .internalError,
+                                                    message: "copyOut: write error: \(String(cString: strerror(errno)))"
+                                                )
+                                            }
+                                            written += w
+                                        }
+                                    }
+                                }
+                                continuation.resume()
+                            } catch {
+                                continuation.resume(throwing: error)
+                            }
+                        }
+                    }
+                }
+
+                try await group.waitForAll()
+            }
+        }
     }
 }
 
@@ -894,6 +1500,26 @@ extension AttachedFilesystem {
             destination: self.destination,
             options: self.options
         )
+    }
+}
+
+/// Normalize mount destinations via ``FilePath/lexicallyNormalized()`` and
+/// sort mounts by the depth of their destination path. This ensures that
+/// higher level mounts don't shadow other mounts. For example, if a user
+/// specifies mounts for `/tmp/foo/bar` and `/tmp`, sorting by depth ensures
+/// `/tmp` is mounted first without shadowing `/tmp/foo/bar`.
+func cleanAndSortMounts(_ mounts: [ContainerizationOCI.Mount]) -> [ContainerizationOCI.Mount] {
+    var mounts = mounts
+    for i in mounts.indices {
+        mounts[i].destination = FilePath(mounts[i].destination).lexicallyNormalized().string
+    }
+    return sortMountsByDestinationDepth(mounts)
+}
+
+/// Sort mounts by the depth of their destination path.
+func sortMountsByDestinationDepth(_ mounts: [ContainerizationOCI.Mount]) -> [ContainerizationOCI.Mount] {
+    mounts.sorted { a, b in
+        a.destination.split(separator: "/").count < b.destination.split(separator: "/").count
     }
 }
 
@@ -938,5 +1564,3 @@ struct IOUtil {
         )
     }
 }
-
-#endif

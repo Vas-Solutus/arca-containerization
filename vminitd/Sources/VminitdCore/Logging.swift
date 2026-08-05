@@ -1,0 +1,114 @@
+//===----------------------------------------------------------------------===//
+// Copyright © 2026 Apple Inc. and the Containerization project authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//   https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//===----------------------------------------------------------------------===//
+
+#if os(Linux)
+
+import ArgumentParser
+import Foundation
+import Logging
+import Synchronization
+
+public struct LogLevelOption: ParsableArguments {
+    @Option(name: .long, help: "Set the log level (trace, debug, info, notice, warning, error, critical)")
+    public var logLevel: String = "info"
+
+    public init() {}
+
+    public init(logLevel: String) {
+        self.logLevel = logLevel
+    }
+
+    public func resolvedLogLevel() -> Logger.Level {
+        switch logLevel.lowercased() {
+        case "trace":
+            return .trace
+        case "debug":
+            return .debug
+        case "info":
+            return .info
+        case "notice":
+            return .notice
+        case "warning":
+            return .warning
+        case "error":
+            return .error
+        case "critical":
+            return .critical
+        default:
+            return .info
+        }
+    }
+}
+
+private let _loggingBootstrapped = Mutex(false)
+private let _versionMetadata = Mutex<Logger.Metadata>([:])
+
+/// Set the version metadata logged on boot.
+public func setVersionMetadata(_ metadata: Logger.Metadata) {
+    _versionMetadata.withLock { $0 = metadata }
+}
+
+func versionMetadata() -> Logger.Metadata {
+    _versionMetadata.withLock { $0 }
+}
+
+func makeLogger(label: String, level: Logger.Level) -> Logger {
+    _loggingBootstrapped.withLock { bootstrapped in
+        if !bootstrapped {
+            LoggingSystem.bootstrap { label in StderrLogHandler(label: label) }
+            bootstrapped = true
+        }
+    }
+    var log = Logger(label: label)
+    log.logLevel = level
+    return log
+}
+
+private struct StderrLogHandler: LogHandler {
+    let label: String
+    var logLevel: Logger.Level = .info
+    var metadata: Logger.Metadata = [:]
+
+    subscript(metadataKey key: String) -> Logger.Metadata.Value? {
+        get { metadata[key] }
+        set { metadata[key] = newValue }
+    }
+
+    func log(event: LogEvent) {
+        var merged = self.metadata
+        event.metadata?.forEach { merged[$0] = $1 }
+        let metaStr = merged.isEmpty ? "" : " \(merged.map { "\($0): \($1)" }.sorted().joined(separator: ", "))"
+        let ts = isoTimestamp()
+        let data = "\(ts) \(event.level) \(label):\(metaStr) \(event.message)\n".data(using: .utf8) ?? Data()
+        FileHandle.standardError.write(data)
+    }
+
+    func isoTimestamp() -> String {
+        let date = Date()
+        var time = time_t(date.timeIntervalSince1970)
+        var ms = Int(date.timeIntervalSince1970 * 1000) % 1000
+        if ms < 0 { ms += 1000 }
+        var tm = tm()
+        gmtime_r(&time, &tm)
+        let buf = withUnsafeTemporaryAllocation(of: CChar.self, capacity: 32) { ptr -> String in
+            strftime(ptr.baseAddress!, 32, "%Y-%m-%dT%H:%M:%S", &tm)
+            return String(cString: ptr.baseAddress!)
+        }
+        return String(format: "%@.%03dZ", buf, ms)
+    }
+}
+
+#endif

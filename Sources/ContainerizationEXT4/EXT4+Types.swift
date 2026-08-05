@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright © 2025 Apple Inc. and the Containerization project authors.
+// Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,12 +22,13 @@ extension EXT4 {
     public struct SuperBlock {
         public var inodesCount: UInt32 = 0
         public var blocksCountLow: UInt32 = 0
-        public var rootBlocksCountLow: UInt32 = 0
+        public var reservedBlocksCountLow: UInt32 = 0
         public var freeBlocksCountLow: UInt32 = 0
         public var freeInodesCount: UInt32 = 0
         public var firstDataBlock: UInt32 = 0
         public var logBlockSize: UInt32 = 0
         public var logClusterSize: UInt32 = 0
+        public var blockSize: UInt32 { 1024 << logBlockSize }
         public var blocksPerGroup: UInt32 = 0
         public var clustersPerGroup: UInt32 = 0
         public var inodesPerGroup: UInt32 = 0
@@ -120,7 +121,7 @@ extension EXT4 {
                 0
             )
         public var blocksCountHigh: UInt32 = 0
-        public var rBlocksCountHigh: UInt32 = 0
+        public var reservedBlocksCountHigh: UInt32 = 0
         public var freeBlocksCountHigh: UInt32 = 0
         public var minExtraIsize: UInt16 = 0
         public var wantExtraIsize: UInt16 = 0
@@ -244,6 +245,16 @@ extension EXT4 {
         public var checksum: UInt32 = 0
     }
 
+    static let JournalMagic: UInt32 = 0xC03B_3998
+    static let JournalInode: InodeNumber = 8
+    static let MinJournalBlocks: UInt32 = 1024  // JBD2_MIN_JOURNAL_BLOCKS
+
+    struct DefaultMountOpts {
+        static let journalData: UInt32 = 0x0020  // data=journal
+        static let journalOrdered: UInt32 = 0x0040  // data=ordered
+        static let journalWriteback: UInt32 = 0x0060  // data=writeback
+    }
+
     struct CompatFeature {
         let rawValue: UInt32
 
@@ -365,19 +376,19 @@ extension EXT4 {
     public typealias InodeNumber = UInt32
 
     public struct Inode {
-        var mode: UInt16 = 0
-        var uid: UInt16 = 0
-        var sizeLow: UInt32 = 0
-        var atime: UInt32 = 0
-        var ctime: UInt32 = 0
-        var mtime: UInt32 = 0
-        var dtime: UInt32 = 0
-        var gid: UInt16 = 0
-        var linksCount: UInt16 = 0
-        var blocksLow: UInt32 = 0
-        var flags: UInt32 = 0
-        var version: UInt32 = 0
-        var block:
+        public var mode: UInt16 = 0
+        public var uid: UInt16 = 0
+        public var sizeLow: UInt32 = 0
+        public var atime: UInt32 = 0
+        public var ctime: UInt32 = 0
+        public var mtime: UInt32 = 0
+        public var dtime: UInt32 = 0
+        public var gid: UInt16 = 0
+        public var linksCount: UInt16 = 0
+        public var blocksLow: UInt32 = 0
+        public var flags: UInt32 = 0
+        public var version: UInt32 = 0
+        public var block:
             (
                 UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8,
                 UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8,
@@ -393,26 +404,26 @@ extension EXT4 {
                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
             )
-        var generation: UInt32 = 0
-        var xattrBlockLow: UInt32 = 0
-        var sizeHigh: UInt32 = 0
-        var obsoleteFragmentAddr: UInt32 = 0
-        var blocksHigh: UInt16 = 0
-        var xattrBlockHigh: UInt16 = 0
-        var uidHigh: UInt16 = 0
-        var gidHigh: UInt16 = 0
-        var checksumLow: UInt16 = 0
-        var reserved: UInt16 = 0
-        var extraIsize: UInt16 = 0
-        var checksumHigh: UInt16 = 0
-        var ctimeExtra: UInt32 = 0
-        var mtimeExtra: UInt32 = 0
-        var atimeExtra: UInt32 = 0
-        var crtime: UInt32 = 0
-        var crtimeExtra: UInt32 = 0
-        var versionHigh: UInt32 = 0
-        var projid: UInt32 = 0  // Size until this point is 160 bytes
-        var inlineXattrs:
+        public var generation: UInt32 = 0
+        public var xattrBlockLow: UInt32 = 0
+        public var sizeHigh: UInt32 = 0
+        public var obsoleteFragmentAddr: UInt32 = 0
+        public var blocksHigh: UInt16 = 0
+        public var xattrBlockHigh: UInt16 = 0
+        public var uidHigh: UInt16 = 0
+        public var gidHigh: UInt16 = 0
+        public var checksumLow: UInt16 = 0
+        public var reserved: UInt16 = 0
+        public var extraIsize: UInt16 = 0
+        public var checksumHigh: UInt16 = 0
+        public var ctimeExtra: UInt32 = 0
+        public var mtimeExtra: UInt32 = 0
+        public var atimeExtra: UInt32 = 0
+        public var crtime: UInt32 = 0
+        public var crtimeExtra: UInt32 = 0
+        public var versionHigh: UInt32 = 0
+        public var projid: UInt32 = 0  // Size until this point is 160 bytes
+        public var inlineXattrs:
             (  // 96 bytes for extended attributes
                 UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8,
                 UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8,

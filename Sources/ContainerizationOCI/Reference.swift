@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright © 2025 Apple Inc. and the Containerization project authors.
+// Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,8 +17,13 @@
 import ContainerizationError
 import Foundation
 
-private let referenceTotalLengthMax = 255
-private let nameTotalLengthMax = 127
+// nameTotalLengthMax matches the OCI distribution spec which allows up to 255 bytes for the
+// repository name component (domain + "/" + path).
+private let nameTotalLengthMax = 255
+// referenceTotalLengthMax is the upper bound for the full reference string: max name (255) +
+// separator (1) + max tag length (128) = 384.
+private let tagLengthMax = 128
+private let referenceTotalLengthMax = nameTotalLengthMax + 1 + tagLengthMax
 private let legacyDockerRegistryHost = "docker.io"
 private let dockerRegistryHost = "registry-1.docker.io"
 private let defaultDockerRegistryRepo = "library"
@@ -105,12 +110,12 @@ public class Reference: CustomStringConvertible {
 
     public static func parse(_ s: String) throws -> Reference {
         if s.count > referenceTotalLengthMax {
-            throw ContainerizationError(.invalidArgument, message: "Reference length \(s.count) greater than \(referenceTotalLengthMax)")
+            throw ContainerizationError(.invalidArgument, message: "reference length \(s.count) greater than \(referenceTotalLengthMax)")
         }
 
         let identifierRegex = try Regex(Self.identifierPattern)
         guard try identifierRegex.wholeMatch(in: s) == nil else {
-            throw ContainerizationError(.invalidArgument, message: "Cannot specify 64 byte hex string as reference")
+            throw ContainerizationError(.invalidArgument, message: "cannot specify 64 byte hex string as reference")
         }
 
         let (domain, remainder) = try Self.parseDomain(from: s)
@@ -118,17 +123,17 @@ public class Reference: CustomStringConvertible {
         if let domain {
             let domainRegex = try Regex(domainPattern)
             guard try domainRegex.wholeMatch(in: domain) != nil else {
-                throw ContainerizationError(.invalidArgument, message: "Invalid domain \(domain) for reference \(s)")
+                throw ContainerizationError(.invalidArgument, message: "invalid domain \(domain) for reference \(s)")
             }
         }
         let fields = try constructedRawReference.matches(regex: pathTagPattern)
         guard let path = fields["path"] else {
-            throw ContainerizationError(.invalidArgument, message: "Cannot parse path for reference \(s)")
+            throw ContainerizationError(.invalidArgument, message: "cannot parse path for reference \(s)")
         }
 
         let ref = try Reference(path: path, domain: domain)
         if ref.name.count > nameTotalLengthMax {
-            throw ContainerizationError(.invalidArgument, message: "Repo length \(ref.name.count) greater than \(nameTotalLengthMax)")
+            throw ContainerizationError(.invalidArgument, message: "repo length \(ref.name.count) greater than \(nameTotalLengthMax)")
         }
 
         // Extract tag and digest
@@ -165,7 +170,7 @@ public class Reference: CustomStringConvertible {
 
     public static func withName(_ name: String) throws -> Reference {
         if name.count > nameTotalLengthMax {
-            throw ContainerizationError(.invalidArgument, message: "Name length \(name.count) greater than \(nameTotalLengthMax)")
+            throw ContainerizationError(.invalidArgument, message: "name length \(name.count) greater than \(nameTotalLengthMax)")
         }
         let fields = try name.matches(regex: Self.domainPattern)
         // Extract domain and path
@@ -173,7 +178,7 @@ public class Reference: CustomStringConvertible {
         let path = fields["path"] ?? ""
 
         if domain.isEmpty || path.isEmpty {
-            throw ContainerizationError(.invalidArgument, message: "Image reference domain or path is empty")
+            throw ContainerizationError(.invalidArgument, message: "image reference domain or path is empty")
         }
 
         return try Reference(path: path, domain: domain)
@@ -188,7 +193,7 @@ public class Reference: CustomStringConvertible {
         tag = fields["tag"] ?? ""
 
         if tag.isEmpty {
-            throw ContainerizationError(.invalidArgument, message: "Invalid format for image reference. Missing tag")
+            throw ContainerizationError(.invalidArgument, message: "invalid format for image reference, missing tag")
         }
         return try Reference(path: self.path, domain: self.domain, tag: tag)
     }
@@ -202,7 +207,7 @@ public class Reference: CustomStringConvertible {
         digest = fields["digest"] ?? ""
 
         if digest.isEmpty {
-            throw ContainerizationError(.invalidArgument, message: "Invalid format for image reference. Missing digest")
+            throw ContainerizationError(.invalidArgument, message: "invalid format for image reference, missing digest")
         }
         return try Reference(path: self.path, domain: self.domain, digest: digest)
     }
@@ -252,7 +257,7 @@ extension String {
             let regex = try NSRegularExpression(pattern: regex, options: [])
             let nsRange = NSRange(self.startIndex..<self.endIndex, in: self)
             guard let match = regex.firstMatch(in: self, options: [], range: nsRange), match.range == nsRange else {
-                throw ContainerizationError(.invalidArgument, message: "Invalid format for image reference")
+                throw ContainerizationError(.invalidArgument, message: "invalid format for image reference")
             }
             var results = [String: String]()
             for name in try regex.captureGroupNames() {

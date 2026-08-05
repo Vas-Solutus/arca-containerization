@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright © 2025 Apple Inc. and the Containerization project authors.
+// Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -65,5 +65,20 @@ struct OCIPlatformTests {
         let lhs = Platform(arch: "arm64", os: "linux", variant: nil)
         let rhs = Platform(arch: "arm64", os: "linux", variant: nil)
         #expect(lhs == rhs, "Both nil variants => variantEqual is true => overall equal")
+    }
+
+    @Test func arm64_nilAndV8_sameHashValue() {
+        let withoutVariant = Platform(arch: "arm64", os: "linux", variant: nil)
+        let withV8 = Platform(arch: "arm64", os: "linux", variant: "v8")
+        // Equal platforms must produce the same hash — violating this breaks Set/Dictionary lookups
+        #expect(withoutVariant.hashValue == withV8.hashValue, "arm64 nil variant and v8 must hash identically")
+    }
+
+    @Test func arm64_nilAndV8_setLookup() {
+        let withoutVariant = Platform(arch: "arm64", os: "linux", variant: nil)
+        let withV8 = Platform(arch: "arm64", os: "linux", variant: "v8")
+        var set = Set<Platform>()
+        set.insert(withoutVariant)
+        #expect(set.contains(withV8), "arm64/v8 must be found in a Set that contains arm64 with nil variant")
     }
 }

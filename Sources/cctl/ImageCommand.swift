@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright © 2025 Apple Inc. and the Containerization project authors.
+// Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -105,7 +105,8 @@ extension Application {
                 })
             var unpackPath: String?
 
-            @Flag(help: "Pull via plain text http") var http: Bool = false
+            @Flag(help: "Pull anonymously via plain-text HTTP.")
+            var http: Bool = false
 
             func run() async throws {
                 let imageStore = Application.imageStore
@@ -124,7 +125,7 @@ extension Application {
                 }
 
                 var startTime = ContinuousClock.now
-                let image = try await Images.withAuthentication(ref: normalizedReference) { auth in
+                let image = try await Images.withAuthentication(ref: normalizedReference, insecure: http) { auth in
                     try await imageStore.pull(reference: normalizedReference, platform: platform, insecure: http, auth: auth)
                 }
 
@@ -140,12 +141,12 @@ extension Application {
                     return
                 }
                 guard !FileManager.default.fileExists(atPath: unpackPath) else {
-                    throw ContainerizationError(.exists, message: "Directory already exists at \(unpackPath)")
+                    throw ContainerizationError(.exists, message: "directory already exists at \(unpackPath)")
                 }
                 let unpackUrl = URL(filePath: unpackPath)
                 try FileManager.default.createDirectory(at: unpackUrl, withIntermediateDirectories: true)
 
-                let unpacker = EXT4Unpacker.init(blockSizeInBytes: 2.gib())
+                let unpacker = EXT4Unpacker.init(capacityInBytes: 2.gib())
 
                 startTime = ContinuousClock.now
                 if let platform {
@@ -177,7 +178,8 @@ extension Application {
 
             @Option(help: "Platform string in the form 'os/arch/variant'. Example 'linux/arm64/v8', 'linux/amd64'") var platformString: String?
 
-            @Flag(help: "Push via plain text http") var http: Bool = false
+            @Flag(help: "Push anonymously via plain-text HTTP.")
+            var http: Bool = false
 
             @Argument var ref: String
 
@@ -197,7 +199,7 @@ extension Application {
                     print("Reference resolved to \(reference.description)")
                 }
 
-                try await Images.withAuthentication(ref: normalizedReference) { auth in
+                try await Images.withAuthentication(ref: normalizedReference, insecure: http) { auth in
                     try await imageStore.push(reference: normalizedReference, platform: platform, insecure: http, auth: auth)
                 }
                 print("image pushed")
@@ -252,29 +254,38 @@ extension Application {
                 defer {
                     try? FileManager.default.removeItem(at: tempDir)
                 }
-                try reader.extractContents(to: tempDir)
+                let rejectedPaths = try reader.extractContents(to: tempDir)
                 let imported = try await store.load(from: tempDir)
                 for image in imported {
                     print("imported \(image.reference)")
+                }
+                for rejectedPath in rejectedPaths {
+                    print("warning: skipped image archive member \(rejectedPath)")
                 }
             }
         }
 
         private static func withAuthentication<T>(
-            ref: String, _ body: @Sendable @escaping (_ auth: Authentication?) async throws -> T?
+            ref: String, insecure: Bool,
+            _ body: @Sendable @escaping (_ auth: Authentication?) async throws -> T?
         ) async throws -> T? {
-            var authentication: Authentication?
-            let ref = try Reference.parse(ref)
-            guard let host = ref.resolvedDomain else {
-                throw ContainerizationError(.invalidArgument, message: "No host specified in image reference")
+            let parsed = try Reference.parse(ref)
+            guard let host = parsed.resolvedDomain else {
+                throw ContainerizationError(.invalidArgument, message: "no host specified in image reference")
             }
-            authentication = Self.authenticationFromEnv(host: host)
-            if let authentication {
-                return try await body(authentication)
+            if insecure {
+                return try await body(nil)
             }
-            let keychain = KeychainHelper(id: Application.keychainID)
-            authentication = try? keychain.lookup(domain: host)
+            if let auth = Self.authenticationFromEnv(host: host) {
+                return try await body(auth)
+            }
+            #if os(macOS)
+            let keychain = KeychainHelper(securityDomain: Application.keychainID)
+            let authentication = try? keychain.lookup(hostname: host)
             return try await body(authentication)
+            #else
+            return try await body(nil)
+            #endif
         }
 
         private static func authenticationFromEnv(host: String) -> Authentication? {

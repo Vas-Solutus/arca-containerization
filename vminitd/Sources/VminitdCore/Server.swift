@@ -1,0 +1,145 @@
+//===----------------------------------------------------------------------===//
+// Copyright © 2026 Apple Inc. and the Containerization project authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//   https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//===----------------------------------------------------------------------===//
+
+#if os(Linux)
+
+import ContainerizationError
+import Foundation
+import GRPCCore
+import GRPCNIOTransportHTTP2
+import GRPCProtobuf
+import Logging
+import NIOCore
+import NIOPosix
+
+public final class Initd: Sendable {
+    public actor State {
+        private(set) var containers: [String: ManagedContainer] = [:]
+        var proxies: [String: VsockProxy] = [:]
+
+        public typealias ContainerDeletedHandler = @Sendable (String) async -> Void
+        private var onContainerDeleted: [ContainerDeletedHandler] = []
+
+        public func onDelete(_ handler: @escaping ContainerDeletedHandler) {
+            onContainerDeleted.append(handler)
+        }
+
+        public func get(container id: String) throws -> ManagedContainer {
+            guard let ctr = self.containers[id] else {
+                throw ContainerizationError(
+                    .notFound,
+                    message: "container \(id) not found"
+                )
+            }
+            return ctr
+        }
+
+        func add(container: ManagedContainer) throws {
+            guard containers[container.id] == nil else {
+                throw ContainerizationError(
+                    .exists,
+                    message: "container \(container.id) already exists"
+                )
+            }
+            containers[container.id] = container
+        }
+
+        func add(proxy: VsockProxy) throws {
+            guard proxies[proxy.id] == nil else {
+                throw ContainerizationError(
+                    .exists,
+                    message: "proxy \(proxy.id) already exists"
+                )
+            }
+            proxies[proxy.id] = proxy
+        }
+
+        func remove(proxy id: String) throws -> VsockProxy {
+            guard let proxy = proxies.removeValue(forKey: id) else {
+                throw ContainerizationError(
+                    .notFound,
+                    message: "proxy \(id) does not exist"
+                )
+            }
+            return proxy
+        }
+
+        func remove(container id: String) throws {
+            guard let _ = containers.removeValue(forKey: id) else {
+                throw ContainerizationError(
+                    .notFound,
+                    message: "container \(id) does not exist"
+                )
+            }
+            let handlers = onContainerDeleted
+            Task {
+                for handler in handlers {
+                    await handler(id)
+                }
+            }
+        }
+    }
+
+    public let log: Logger
+    public let state: State
+    let group: MultiThreadedEventLoopGroup
+    let blockingPool: NIOThreadPool
+
+    public init(log: Logger, group: MultiThreadedEventLoopGroup, blockingPool: NIOThreadPool) {
+        self.log = log
+        self.group = group
+        self.blockingPool = blockingPool
+        self.state = State()
+    }
+
+    public func serve(port: Int, additionalServices: [any RegistrableRPCService] = []) async throws {
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            log.debug("starting process supervisor")
+
+            ProcessSupervisor.default.setLog(self.log)
+            ProcessSupervisor.default.ready()
+
+            log.info(
+                "booting gRPC server on vsock",
+                metadata: [
+                    "port": "\(port)"
+                ])
+
+            let server = GRPCServer(
+                transport: .http2NIOPosix(
+                    address: .vsock(contextID: .any, port: .init(port)),
+                    transportSecurity: .plaintext,
+                    eventLoopGroup: self.group
+                ),
+                services: [self] + additionalServices
+            )
+
+            log.info(
+                "gRPC API serving on vsock",
+                metadata: [
+                    "port": "\(port)"
+                ])
+
+            group.addTask { try await server.serve() }
+
+            try await group.next()
+            log.info("closing gRPC server")
+            group.cancelAll()
+        }
+    }
+}
+
+#endif

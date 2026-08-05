@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright © 2025 Apple Inc. and the Containerization project authors.
+// Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -154,7 +154,7 @@ public actor LocalContentStore: ContentStore {
     @discardableResult
     public func completeIngestSession(_ id: String) async throws -> [String] {
         guard await activeIngestSessions.contains(id) else {
-            throw ContainerizationError(.internalError, message: "Invalid session id \(id)")
+            throw ContainerizationError(.internalError, message: "invalid session id \(id)")
         }
         await activeIngestSessions.remove(id)
         let temporaryPath = self._ingestPath.appendingPathComponent(id)
@@ -197,5 +197,34 @@ public actor LocalContentStore: ContentStore {
         let temporaryPath = self._ingestPath.appendingPathComponent(id)
         let fileManager = FileManager.default
         try? fileManager.removeItem(at: temporaryPath)
+    }
+
+    /// Total bytes allocated on disk for the content store, covering
+    /// committed blobs and any active ingest sessions.
+    public func totalAllocatedSize() throws -> UInt64 {
+        let fileManager = FileManager.default
+        guard
+            let enumerator = fileManager.enumerator(
+                at: self._basePath,
+                includingPropertiesForKeys: [.totalFileAllocatedSizeKey, .isRegularFileKey],
+                options: [.skipsHiddenFiles]
+            )
+        else {
+            throw ContainerizationError(.internalError, message: "failed to enumerate content store at \(self._basePath.path)")
+        }
+        var size: UInt64 = 0
+        for case let fileURL as URL in enumerator {
+            guard let values = try? fileURL.resourceValues(forKeys: [.totalFileAllocatedSizeKey, .isRegularFileKey]), values.isRegularFile == true,
+                let fileSize = values.totalFileAllocatedSize
+            else {
+                // Skip directories and other non-regular entries. On Linux,
+                // `.totalFileAllocatedSizeKey` reports block allocation for
+                // directories, which would otherwise count empty-store
+                // inode overhead as content.
+                continue
+            }
+            size += UInt64(fileSize)
+        }
+        return size
     }
 }

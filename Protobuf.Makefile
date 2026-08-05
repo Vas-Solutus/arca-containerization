@@ -1,4 +1,4 @@
-# Copyright © 2025 Apple Inc. and the Containerization project authors.
+# Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -33,13 +33,13 @@ $(PROTOC):
 .PHONY: protoc-gen-swift
 protoc-gen-swift:
 	@$(SWIFT) build --product protoc-gen-swift
-	@$(SWIFT) build --product protoc-gen-grpc-swift
+	@$(SWIFT) build --product protoc-gen-grpc-swift-2
 
 .PHONY: protos
 protos: $(PROTOC) protoc-gen-swift
 	@echo Generating protocol buffers source code...
 	@$(PROTOC) Sources/Containerization/SandboxContext/SandboxContext.proto \
-		--plugin=protoc-gen-grpc-swift=$(BUILD_BIN_DIR)/protoc-gen-grpc-swift \
+		--plugin=protoc-gen-grpc-swift=$(BUILD_BIN_DIR)/protoc-gen-grpc-swift-2 \
 		--plugin=protoc-gen-swift=$(BUILD_BIN_DIR)/protoc-gen-swift \
 		--proto_path=Sources/Containerization/SandboxContext \
 		--grpc-swift_out="Sources/Containerization/SandboxContext" \

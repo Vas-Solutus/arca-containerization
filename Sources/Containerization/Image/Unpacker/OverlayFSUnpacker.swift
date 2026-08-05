@@ -226,7 +226,8 @@ public struct OverlayFSUnpacker: Sendable {
         )
         defer { try? filesystem.close() }
 
-        try filesystem.unpack(
+        // EXT4.Formatter.unpack became async upstream in the 2026-08 merge.
+        try await filesystem.unpack(
             source: content.path,
             format: .paxRestricted,
             compression: compression,

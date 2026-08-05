@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright © 2025 Apple Inc. and the Containerization project authors.
+// Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -124,7 +124,7 @@ extension ImageStore {
         try await self.lock.withLock { lockCtx in
             try await self.referenceManager.delete(reference: reference)
             if performCleanup {
-                try await self._cleanupOrphanedBlobs(lockCtx)
+                try await self._cleanUpOrphanedBlobs(lockCtx)
             }
         }
     }
@@ -135,9 +135,9 @@ extension ImageStore {
     ///   `deleted` :  A  list of the names of the content items that were deleted from the `ContentStore`,
     ///   `freed` : The total size of the items that were deleted.
     @discardableResult
-    public func cleanupOrphanedBlobs() async throws -> (deleted: [String], freed: UInt64) {
+    public func cleanUpOrphanedBlobs() async throws -> (deleted: [String], freed: UInt64) {
         try await self.lock.withLock { lockCtx in
-            try await self._cleanupOrphanedBlobs(lockCtx)
+            try await self._cleanUpOrphanedBlobs(lockCtx)
         }
     }
 
@@ -151,7 +151,7 @@ extension ImageStore {
     }
 
     @discardableResult
-    private func _cleanupOrphanedBlobs(_ lock: AsyncLock.Context) async throws -> (deleted: [String], freed: UInt64) {
+    private func _cleanUpOrphanedBlobs(_ lock: AsyncLock.Context) async throws -> (deleted: [String], freed: UInt64) {
         let images = try await self.list()
         var referenced: [String] = []
         for image in images {
@@ -208,7 +208,7 @@ extension ImageStore {
         do {
             _ = try Reference.parse(new)
         } catch {
-            throw ContainerizationError(.invalidArgument, message: "Invalid reference \(new). Error: \(error)")
+            throw ContainerizationError(.invalidArgument, message: "invalid reference \(new), error: \(error)")
         }
         let newDescription = Image.Description(reference: new, descriptor: descriptor)
         return try await self.create(description: newDescription)
@@ -237,12 +237,12 @@ extension ImageStore {
     ) async throws -> Image {
 
         let matcher = createPlatformMatcher(for: platform)
-        let client = try RegistryClient(reference: reference, insecure: insecure, auth: auth)
+        let client = try RegistryClient(reference: reference, insecure: insecure, auth: auth, tlsConfiguration: TLSUtils.makeEnvironmentAwareTLSConfiguration())
 
         let ref = try Reference.parse(reference)
         let name = ref.path
         guard let tag = ref.tag ?? ref.digest else {
-            throw ContainerizationError(.invalidArgument, message: "Invalid tag/digest for image reference \(reference)")
+            throw ContainerizationError(.invalidArgument, message: "invalid tag/digest for image reference \(reference)")
         }
 
         let rootDescriptor = try await client.resolve(name: name, tag: tag)
@@ -279,18 +279,100 @@ extension ImageStore {
     ///
     public func push(reference: String, platform: Platform? = nil, insecure: Bool = false, auth: Authentication? = nil, progress: ProgressHandler? = nil) async throws {
         let matcher = createPlatformMatcher(for: platform)
-        let img = try await self.get(reference: reference)
+        let client = try RegistryClient(reference: reference, insecure: insecure, auth: auth, tlsConfiguration: TLSUtils.makeEnvironmentAwareTLSConfiguration())
+        try await self.pushSingle(reference: reference, client: client, matcher: matcher, progress: progress)
+    }
+
+    /// Push multiple image references to a remote registry, sharing a single ``RegistryClient``.
+    ///
+    /// All references must resolve to the same registry host. Passing references that target
+    /// different hosts throws a ``ContainerizationError`` with code ``invalidArgument``.
+    ///
+    /// - Parameters:
+    ///   - references: An array of fully qualified image reference strings to push.
+    ///                  Each must include a host (e.g., `"ghcr.io/myrepo/myimage:v1"`).
+    ///   - platform: An optional parameter to indicate the platform to be pushed for each image.
+    ///               Defaults to `nil` signifying that layers for all supported platforms will be pushed.
+    ///   - insecure: A boolean indicating if the connection to the remote registry should be made via plain-text http or not.
+    ///               Defaults to false, meaning the connection to the registry will be over https.
+    ///   - auth: An object that implements the `Authentication` protocol,
+    ///           used to add any credentials to the HTTP requests that are made to the registry.
+    ///           Defaults to `nil` meaning no additional credentials are added to any HTTP requests made to the registry.
+    ///   - maxConcurrentUploads: Maximum number of concurrent tag pushes. Defaults to 3.
+    ///   - progress: An optional handler over which progress update events about the push operations can be received.
+    ///
+    public func push(
+        references: [String], platform: Platform? = nil, insecure: Bool = false,
+        auth: Authentication? = nil, maxConcurrentUploads: Int = 3, progress: ProgressHandler? = nil
+    ) async throws {
+        guard let firstReference = references.first else {
+            return
+        }
+
+        // Parse all references upfront: validate hosts and avoid re-parsing inside tasks.
+        let parsed = try references.map { ref in try Reference.parse(ref) }
+        let hosts = parsed.compactMap { $0.resolvedDomain }
+        guard hosts.count == references.count else {
+            throw ContainerizationError(.invalidArgument, message: "all references must include a host")
+        }
+        let uniqueHosts = Set(hosts)
+        guard uniqueHosts.count == 1 else {
+            throw ContainerizationError(
+                .invalidArgument,
+                message: "all references must target the same registry host, got: \(uniqueHosts.sorted().joined(separator: ", "))")
+        }
+
+        let matcher = createPlatformMatcher(for: platform)
+        let client = try RegistryClient(
+            reference: firstReference, insecure: insecure, auth: auth,
+            tlsConfiguration: TLSUtils.makeEnvironmentAwareTLSConfiguration())
+
+        let pushOne: @Sendable (String) async -> (String, String?) = { reference in
+            do {
+                try await self.pushSingle(reference: reference, client: client, matcher: matcher, progress: progress)
+                return (reference, nil)
+            } catch {
+                return (reference, String(describing: error))
+            }
+        }
+
+        var iterator = references.makeIterator()
+        var failures: [(reference: String, message: String)] = []
+
+        await withTaskGroup(of: (String, String?).self) { group in
+            for _ in 0..<maxConcurrentUploads {
+                guard let reference = iterator.next() else { break }
+                group.addTask { await pushOne(reference) }
+            }
+            for await (ref, error) in group {
+                if let error {
+                    failures.append((ref, error))
+                }
+                if let reference = iterator.next() {
+                    group.addTask { await pushOne(reference) }
+                }
+            }
+        }
+
+        if !failures.isEmpty {
+            let details = failures.map { "\($0.reference): \($0.message)" }.joined(separator: "\n")
+            throw ContainerizationError(.internalError, message: "failed to push one or more images:\n\(details)")
+        }
+    }
+
+    private func pushSingle(
+        reference: String, client: ContentClient, matcher: @Sendable (Platform) -> Bool, progress: ProgressHandler?
+    ) async throws {
         let allowedMediaTypes = [MediaTypes.dockerManifestList, MediaTypes.index]
+        let img = try await self.get(reference: reference)
         guard allowedMediaTypes.contains(img.mediaType) else {
-            throw ContainerizationError(.internalError, message: "Cannot push image \(reference) with Index media type \(img.mediaType)")
+            throw ContainerizationError(.internalError, message: "cannot push image \(reference): unsupported media type \(img.mediaType), expected an index or manifest list")
         }
         let ref = try Reference.parse(reference)
-        let name = ref.path
         guard let tag = ref.tag ?? ref.digest else {
-            throw ContainerizationError(.invalidArgument, message: "Invalid tag/digest for image reference \(reference)")
+            throw ContainerizationError(.invalidArgument, message: "invalid tag/digest for image reference \(reference)")
         }
-        let client = try RegistryClient(reference: reference, insecure: insecure, auth: auth)
-        let operation = ExportOperation(name: name, tag: tag, contentStore: self.contentStore, client: client, progress: progress)
+        let operation = ExportOperation(name: ref.path, tag: tag, contentStore: self.contentStore, client: client, progress: progress)
         try await operation.export(index: img.descriptor, platforms: matcher)
     }
 }

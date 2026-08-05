@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright © 2025 Apple Inc. and the Containerization project authors.
+// Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,22 +20,38 @@ import ContainerizationOS
 
 /// Helper type to lookup registry related values in the macOS keychain.
 public struct KeychainHelper: Sendable {
-    private let id: String
-    public init(id: String) {
-        self.id = id
+    private let securityDomain: String
+    private let accessGroup: String?
+
+    /// Create a new keychain helper.
+    /// - Parameters:
+    ///   - securityDomain: The security domain used to fetch registry entries in the keychain.
+    ///   - accessGroup: If present, the access group used to fetch registry entries in the keychain.
+    public init(securityDomain: String, accessGroup: String? = nil) {
+        self.securityDomain = securityDomain
+        self.accessGroup = accessGroup
     }
 
-    /// Lookup authorization data for a given registry domain.
-    public func lookup(domain: String) throws -> Authentication {
+    /// Lookup authentication data for a given registry hostname.
+    /// - Parameters:
+    ///   - hostname: The hostname for the registry.
+    /// - Returns: The authentication object for the registry.
+    /// - Throws: An error if the keychain query fails.
+    public func lookup(hostname: String) throws -> Authentication {
         let kq = KeychainQuery()
 
         do {
-            guard let fetched = try kq.get(id: self.id, host: domain) else {
+            guard
+                let fetched = try kq.get(
+                    securityDomain: self.securityDomain,
+                    accessGroup: self.accessGroup,
+                    hostname: hostname)
+            else {
                 throw Self.Error.keyNotFound
             }
             return BasicAuthentication(
-                username: fetched.account,
-                password: fetched.data
+                username: fetched.username,
+                password: fetched.password
             )
         } catch let err as KeychainQuery.Error {
             switch err {
@@ -47,30 +63,52 @@ public struct KeychainHelper: Sendable {
         }
     }
 
-    /// Delete authorization data for a given domain from the keychain.
-    public func delete(domain: String) throws {
+    /// Lists all registry entries for this security domain.
+    /// - Returns: An array of registry metadata for each matching entry, or an empty array if none are found.
+    /// - Throws: An error if the keychain query fails.
+    public func list() throws -> [RegistryInfo] {
         let kq = KeychainQuery()
-        try kq.delete(id: self.id, host: domain)
+        return try kq.list(securityDomain: self.securityDomain, accessGroup: self.accessGroup)
     }
 
-    /// Save authorization data for a given domain to the keychain.
-    public func save(domain: String, username: String, password: String) throws {
+    /// Delete authorization data for a given hostname from the keychain.
+    /// - Parameters:
+    ///   - hostname: The hostname for the registry.
+    /// - Throws: An error if the keychain query fails.
+    public func delete(hostname: String) throws {
         let kq = KeychainQuery()
-        try kq.save(id: self.id, host: domain, user: username, token: password)
+        try kq.delete(securityDomain: self.securityDomain, accessGroup: self.accessGroup, hostname: hostname)
     }
 
-    /// Prompt for authorization data for a given domain to be saved to the keychain.
+    /// Save authorization data for a given hostname to the keychain.
+    /// - Parameters:
+    ///   - hostname: The hostname for the registry.
+    ///   - username: The username to present to the registry.
+    ///   - password: The password to present to the registry.
+    /// - Throws: An error if the keychain query fails or returns unexpected data.
+    public func save(hostname: String, username: String, password: String) throws {
+        let kq = KeychainQuery()
+        try kq.save(
+            securityDomain: self.securityDomain,
+            accessGroup: self.accessGroup,
+            hostname: hostname,
+            username: username,
+            password: password
+        )
+    }
+
+    /// Prompt for authorization data for a given hostname to be saved to the keychain.
     /// This will cause the current terminal to enter a password prompt state where
     /// key strokes are hidden.
-    public func credentialPrompt(domain: String) throws -> Authentication {
-        let username = try userPrompt(domain: domain)
+    public func credentialPrompt(hostname: String) throws -> Authentication {
+        let username = try userPrompt(hostname: hostname)
         let password = try passwordPrompt()
         return BasicAuthentication(username: username, password: password)
     }
 
     /// Prompts the current stdin for a username entry and then returns the value.
-    public func userPrompt(domain: String) throws -> String {
-        print("Provide registry username \(domain): ", terminator: "")
+    public func userPrompt(hostname: String) throws -> String {
+        print("Provide registry username \(hostname): ", terminator: "")
         guard let username = readLine() else {
             throw Self.Error.invalidInput
         }

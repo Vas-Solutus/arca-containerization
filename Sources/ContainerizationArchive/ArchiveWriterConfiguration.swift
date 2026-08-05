@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright © 2025 Apple Inc. and the Containerization project authors.
+// Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,6 +21,8 @@ import CArchive
 /// This struct allows specifying the archive format, compression filter,
 /// various format-specific options, and preferred locales for string encoding.
 public struct ArchiveWriterConfiguration {
+    public static let defaultLocales = ["en_US.UTF-8", "C.UTF-8"]
+
     /// The desired archive format
     public var format: Format
     /// The compression filter to apply to the archive
@@ -35,7 +37,7 @@ public struct ArchiveWriterConfiguration {
     ///
     /// Sets up the configuration with the specified format, filter, options, and locales.
     public init(
-        format: Format, filter: Filter, options: [Options] = [], locales: [String] = ["en_US.UTF-8", "C.UTF-8"]
+        format: Format, filter: Filter, options: [Options] = [], locales: [String] = Self.defaultLocales
     ) {
         self.format = format
         self.filter = filter
@@ -58,6 +60,7 @@ extension ArchiveWriter {
     }
 
     internal func setOptions(_ options: [Options]) throws {
+        guard let underlying = self.underlying else { throw ArchiveError.noUnderlyingArchive }
         try options.forEach {
             switch $0 {
             case .compressionLevel(let level):
@@ -174,6 +177,7 @@ public enum Filter: String, Sendable {
     case lzop
     case grzip
     case lz4
+    case zstd
 
     internal var code: CInt {
         switch self {
@@ -190,6 +194,7 @@ public enum Filter: String, Sendable {
         case .lzop: return ARCHIVE_FILTER_LZOP
         case .grzip: return ARCHIVE_FILTER_GRZIP
         case .lz4: return ARCHIVE_FILTER_LZ4
+        case .zstd: return ARCHIVE_FILTER_ZSTD
         }
     }
 }

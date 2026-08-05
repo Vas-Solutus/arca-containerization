@@ -1,0 +1,1965 @@
+//===----------------------------------------------------------------------===//
+// Copyright © 2026 Apple Inc. and the Containerization project authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//   https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//===----------------------------------------------------------------------===//
+
+#if os(Linux)
+
+import Cgroup
+import Containerization
+import ContainerizationArchive
+import ContainerizationError
+import ContainerizationExtras
+import ContainerizationNetlink
+import ContainerizationOCI
+import ContainerizationOS
+import Foundation
+import GRPCCore
+import GRPCProtobuf
+import Logging
+import NIOCore
+import NIOPosix
+import SwiftProtobuf
+import SystemPackage
+
+private let _setenv = Foundation.setenv
+
+#if canImport(Musl)
+import Musl
+private let _mount = Musl.mount
+private let _umount = Musl.umount2
+private let _kill = Musl.kill
+private let _sync = Musl.sync
+typealias _stat_struct = Musl.stat
+private let _stat: @Sendable (UnsafePointer<CChar>, UnsafeMutablePointer<_stat_struct>) -> Int32 = stat
+#elseif canImport(Glibc)
+import Glibc
+private let _mount = Glibc.mount
+private let _umount = Glibc.umount2
+private let _kill = Glibc.kill
+private let _sync = Glibc.sync
+typealias _stat_struct = Glibc.stat
+private let _stat: @Sendable (UnsafePointer<CChar>, UnsafeMutablePointer<_stat_struct>) -> Int32 = stat
+#endif
+
+extension ContainerizationError {
+    func toRPCError(operation: String) -> RPCError {
+        let message = "\(operation): \(self)"
+        let code: RPCError.Code = {
+            switch self.code {
+            case .invalidArgument:
+                return .invalidArgument
+            case .notFound:
+                return .notFound
+            case .exists:
+                return .alreadyExists
+            case .cancelled:
+                return .cancelled
+            case .unsupported:
+                return .unimplemented
+            case .unknown:
+                return .unknown
+            case .internalError:
+                return .internalError
+            case .interrupted:
+                return .unavailable
+            case .invalidState:
+                return .failedPrecondition
+            case .timeout:
+                return .deadlineExceeded
+            default:
+                return .internalError
+            }
+        }()
+        return RPCError(code: code, message: message, cause: self)
+    }
+}
+
+extension Initd: Com_Apple_Containerization_Sandbox_V3_SandboxContext.SimpleServiceProtocol {
+    public func setTime(
+        request: Com_Apple_Containerization_Sandbox_V3_SetTimeRequest,
+        context: GRPCCore.ServerContext
+    ) async throws -> Com_Apple_Containerization_Sandbox_V3_SetTimeResponse {
+        log.trace(
+            "setTime",
+            metadata: [
+                "sec": "\(request.sec)",
+                "usec": "\(request.usec)",
+            ])
+
+        var tv = timeval(tv_sec: time_t(request.sec), tv_usec: suseconds_t(request.usec))
+        guard settimeofday(&tv, nil) == 0 else {
+            let error = swiftErrno("settimeofday")
+            log.error(
+                "setTime",
+                metadata: [
+                    "error": "\(error)"
+                ])
+            throw RPCError(code: .internalError, message: "failed to settimeofday", cause: error)
+        }
+
+        return .init()
+    }
+
+    public func setupEmulator(
+        request: Com_Apple_Containerization_Sandbox_V3_SetupEmulatorRequest,
+        context: GRPCCore.ServerContext
+    ) async throws -> Com_Apple_Containerization_Sandbox_V3_SetupEmulatorResponse {
+        log.debug(
+            "setupEmulator",
+            metadata: [
+                "request": "\(request)"
+            ])
+
+        if !Binfmt.mounted() {
+            throw RPCError(
+                code: .internalError,
+                message: "\(Binfmt.path) is not mounted"
+            )
+        }
+
+        do {
+            let bfmt = Binfmt.Entry(
+                name: request.name,
+                type: request.type,
+                offset: request.offset,
+                magic: request.magic,
+                mask: request.mask,
+                flags: request.flags
+            )
+            try bfmt.register(binaryPath: request.binaryPath)
+        } catch {
+            log.error(
+                "setupEmulator",
+                metadata: [
+                    "error": "\(error)"
+                ])
+            throw RPCError(
+                code: .internalError,
+                message: "setupEmulator: failed to register binfmt_misc entry",
+                cause: error
+            )
+        }
+
+        return .init()
+    }
+
+    public func sysctl(
+        request: Com_Apple_Containerization_Sandbox_V3_SysctlRequest,
+        context: GRPCCore.ServerContext
+    ) async throws -> Com_Apple_Containerization_Sandbox_V3_SysctlResponse {
+        log.debug(
+            "sysctl",
+            metadata: [
+                "settings": "\(request.settings)"
+            ])
+
+        do {
+            let sysctlPath = URL(fileURLWithPath: "/proc/sys/")
+            for (k, v) in request.settings {
+                guard let data = v.data(using: .ascii) else {
+                    throw RPCError(code: .internalError, message: "failed to convert \(v) to data buffer for sysctl write")
+                }
+
+                let setting =
+                    sysctlPath
+                    .appendingPathComponent(k.replacingOccurrences(of: ".", with: "/"))
+                let fh = try FileHandle(forWritingTo: setting)
+                defer { try? fh.close() }
+
+                try fh.write(contentsOf: data)
+            }
+        } catch {
+            log.error(
+                "sysctl",
+                metadata: [
+                    "error": "\(error)"
+                ])
+            throw RPCError(
+                code: .internalError,
+                message: "sysctl: failed to set sysctl",
+                cause: error
+            )
+        }
+
+        return .init()
+    }
+
+    public func proxyVsock(
+        request: Com_Apple_Containerization_Sandbox_V3_ProxyVsockRequest,
+        context: GRPCCore.ServerContext
+    ) async throws -> Com_Apple_Containerization_Sandbox_V3_ProxyVsockResponse {
+        log.debug(
+            "proxyVsock",
+            metadata: [
+                "id": "\(request.id)",
+                "port": "\(request.vsockPort)",
+                "guestPath": "\(request.guestPath)",
+                "action": "\(request.action)",
+            ])
+
+        let proxy = VsockProxy(
+            id: request.id,
+            action: request.action == .into ? .dial : .listen,
+            port: request.vsockPort,
+            path: URL(fileURLWithPath: request.guestPath),
+            udsPerms: request.guestSocketPermissions,
+            log: log
+        )
+
+        do {
+            try await proxy.start()
+            try await state.add(proxy: proxy)
+        } catch {
+            try? await proxy.close()
+            log.error(
+                "proxyVsock",
+                metadata: [
+                    "error": "\(error)"
+                ])
+            throw RPCError(
+                code: .internalError,
+                message: "proxyVsock: failed to setup vsock proxy",
+                cause: error
+            )
+        }
+
+        log.info(
+            "proxyVsock started",
+            metadata: [
+                "id": "\(request.id)",
+                "port": "\(request.vsockPort)",
+                "guestPath": "\(request.guestPath)",
+            ])
+
+        return .init()
+    }
+
+    public func stopVsockProxy(
+        request: Com_Apple_Containerization_Sandbox_V3_StopVsockProxyRequest,
+        context: GRPCCore.ServerContext
+    ) async throws -> Com_Apple_Containerization_Sandbox_V3_StopVsockProxyResponse {
+        log.debug(
+            "stopVsockProxy",
+            metadata: [
+                "id": "\(request.id)"
+            ])
+
+        do {
+            let proxy = try await state.remove(proxy: request.id)
+            try await proxy.close()
+        } catch {
+            log.error(
+                "stopVsockProxy",
+                metadata: [
+                    "error": "\(error)"
+                ])
+            throw RPCError(
+                code: .internalError,
+                message: "stopVsockProxy: failed to stop vsock proxy",
+                cause: error
+            )
+        }
+
+        log.info(
+            "stopVsockProxy completed",
+            metadata: [
+                "id": "\(request.id)"
+            ])
+
+        return .init()
+    }
+
+    public func mkdir(request: Com_Apple_Containerization_Sandbox_V3_MkdirRequest, context: GRPCCore.ServerContext)
+        async throws -> Com_Apple_Containerization_Sandbox_V3_MkdirResponse
+    {
+        log.debug(
+            "mkdir",
+            metadata: [
+                "path": "\(request.path)",
+                "all": "\(request.all)",
+            ])
+
+        do {
+            try FileManager.default.createDirectory(
+                atPath: request.path,
+                withIntermediateDirectories: request.all
+            )
+        } catch {
+            log.error(
+                "mkdir",
+                metadata: [
+                    "error": "\(error)"
+                ])
+            throw RPCError(code: .internalError, message: "mkdir", cause: error)
+        }
+
+        return .init()
+    }
+
+    public func writeFile(request: Com_Apple_Containerization_Sandbox_V3_WriteFileRequest, context: GRPCCore.ServerContext)
+        async throws -> Com_Apple_Containerization_Sandbox_V3_WriteFileResponse
+    {
+        log.debug(
+            "writeFile",
+            metadata: [
+                "path": "\(request.path)",
+                "mode": "\(request.mode)",
+                "dataSize": "\(request.data.count)",
+            ])
+
+        do {
+            if request.flags.createParentDirs {
+                let fileURL = URL(fileURLWithPath: request.path)
+                let parentDir = fileURL.deletingLastPathComponent()
+                try FileManager.default.createDirectory(
+                    at: parentDir,
+                    withIntermediateDirectories: true
+                )
+            }
+
+            var flags = O_WRONLY
+            if request.flags.createIfMissing {
+                flags |= O_CREAT
+            }
+            if request.flags.append {
+                flags |= O_APPEND
+            }
+
+            let mode = request.mode > 0 ? mode_t(request.mode) : mode_t(0644)
+            let fd = open(request.path, flags, mode)
+            guard fd != -1 else {
+                let error = swiftErrno("open")
+                throw RPCError(
+                    code: .internalError,
+                    message: "writeFile: failed to open file",
+                    cause: error
+                )
+            }
+
+            let fh = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+            try fh.write(contentsOf: request.data)
+        } catch {
+            log.error(
+                "writeFile",
+                metadata: [
+                    "error": "\(error)"
+                ])
+            if error is RPCError {
+                throw error
+            }
+            throw RPCError(
+                code: .internalError,
+                message: "writeFile",
+                cause: error
+            )
+        }
+
+        return .init()
+    }
+
+    public func stat(
+        request: Com_Apple_Containerization_Sandbox_V3_StatRequest,
+        context: GRPCCore.ServerContext,
+    ) async throws -> Com_Apple_Containerization_Sandbox_V3_StatResponse {
+        log.debug(
+            "stat",
+            metadata: [
+                "path": "\(request.path)"
+            ]
+        )
+
+        #if os(Linux)
+        var s = _stat_struct()
+        let result = _stat(request.path, &s)
+        if result == -1 {
+            let error = swiftErrno("stat")
+            if error.code == .ENOENT {
+                throw RPCError(
+                    code: .notFound,
+                    message: "stat: path not found '\(request.path)'",
+                    cause: error
+                )
+            }
+            return .with { $0.error = "\(error)" }
+        }
+        return .with {
+            $0.stat = .with {
+                $0.dev = UInt64(s.st_dev)
+                $0.ino = UInt64(s.st_ino)
+                $0.mode = s.st_mode
+                $0.nlink = UInt64(s.st_nlink)
+                $0.uid = s.st_uid
+                $0.gid = s.st_gid
+                $0.rdev = UInt64(s.st_rdev)
+                $0.size = Int64(s.st_size)
+                $0.blksize = Int64(s.st_blksize)
+                $0.blocks = Int64(s.st_blocks)
+                $0.atime = .with {
+                    $0.seconds = Int64(s.st_atim.tv_sec)
+                    $0.nanos = Int32(s.st_atim.tv_nsec)
+                }
+                $0.mtime = .with {
+                    $0.seconds = Int64(s.st_mtim.tv_sec)
+                    $0.nanos = Int32(s.st_mtim.tv_nsec)
+                }
+                $0.ctime = .with {
+                    $0.seconds = Int64(s.st_ctim.tv_sec)
+                    $0.nanos = Int32(s.st_ctim.tv_nsec)
+                }
+            }
+        }
+        #else
+        fatalError("stat not supported on platform")
+        #endif
+    }
+
+    // Chunk size for streaming file transfers (1MB).
+    private static let copyChunkSize = 1024 * 1024
+
+    public func copy(
+        request: Com_Apple_Containerization_Sandbox_V3_CopyRequest,
+        response: GRPCCore.RPCWriter<Com_Apple_Containerization_Sandbox_V3_CopyResponse>,
+        context: GRPCCore.ServerContext
+    ) async throws {
+        let path = request.path
+        let vsockPort = request.vsockPort
+
+        log.debug(
+            "copy",
+            metadata: [
+                "direction": "\(request.direction)",
+                "path": "\(path)",
+                "vsockPort": "\(vsockPort)",
+                "isArchive": "\(request.isArchive)",
+                "mode": "\(request.mode)",
+                "createParents": "\(request.createParents)",
+            ])
+
+        do {
+            switch request.direction {
+            case .copyIn:
+                try await handleCopyIn(request: request, response: response)
+            case .copyOut:
+                try await handleCopyOut(request: request, response: response)
+            case .UNRECOGNIZED(let value):
+                throw RPCError(code: .invalidArgument, message: "copy: unrecognized direction \(value)")
+            }
+        } catch {
+            log.error(
+                "copy failed",
+                metadata: [
+                    "direction": "\(request.direction)",
+                    "path": "\(path)",
+                    "error": "\(error)",
+                ])
+            if error is RPCError {
+                throw error
+            }
+            throw RPCError(code: .internalError, message: "copy failed", cause: error)
+        }
+    }
+
+    /// Handle a COPY_IN request: connect to host vsock port, read data, write to guest filesystem.
+    private func handleCopyIn(
+        request: Com_Apple_Containerization_Sandbox_V3_CopyRequest,
+        response: GRPCCore.RPCWriter<Com_Apple_Containerization_Sandbox_V3_CopyResponse>
+    ) async throws {
+        let path = request.path
+        let isArchive = request.isArchive
+
+        if request.createParents {
+            let parentDir = URL(fileURLWithPath: path).deletingLastPathComponent()
+            try FileManager.default.createDirectory(at: parentDir, withIntermediateDirectories: true)
+        }
+
+        // Connect to the host's vsock port for data transfer.
+        let vsockType = VsockType(port: request.vsockPort, cid: VsockType.hostCID)
+        let sock = try Socket(type: vsockType, closeOnDeinit: false)
+        try sock.connect()
+        let sockFd = sock.fileDescriptor
+
+        // Dispatch blocking I/O onto the thread pool.
+        let rejected: [String] = try await blockingPool.runIfActive { [self] in
+            defer { try? sock.close() }
+
+            guard isArchive else {
+                let mode = request.mode > 0 ? mode_t(request.mode) : mode_t(0o644)
+                let fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, mode)
+                guard fd != -1 else {
+                    throw RPCError(
+                        code: .internalError,
+                        message: "copy: failed to open file '\(path)': \(swiftErrno("open"))"
+                    )
+                }
+                defer { close(fd) }
+
+                var buf = [UInt8](repeating: 0, count: Self.copyChunkSize)
+                while true {
+                    let n = read(sockFd, &buf, buf.count)
+                    if n == 0 { break }
+                    guard n > 0 else {
+                        throw RPCError(
+                            code: .internalError,
+                            message: "copy: vsock read error: \(swiftErrno("read"))"
+                        )
+                    }
+                    var written = 0
+                    while written < n {
+                        let w = buf.withUnsafeBytes { ptr in
+                            write(fd, ptr.baseAddress! + written, n - written)
+                        }
+                        guard w > 0 else {
+                            throw RPCError(
+                                code: .internalError,
+                                message: "copy: write error: \(swiftErrno("write"))"
+                            )
+                        }
+                        written += w
+                    }
+                }
+                return []
+            }
+            let destURL = URL(fileURLWithPath: path)
+            try FileManager.default.createDirectory(at: destURL, withIntermediateDirectories: true)
+
+            let fileHandle = FileHandle(fileDescriptor: sockFd, closeOnDealloc: false)
+            let reader = try ArchiveReader(format: .pax, filter: .gzip, fileHandle: fileHandle)
+            return try reader.extractContents(to: destURL)
+        }
+
+        if !rejected.isEmpty {
+            log.info("copy: archive extracted", metadata: ["path": "\(path)", "rejectedCount": "\(rejected.count)"])
+            for rejectedPath in rejected {
+                log.error("copy: rejected archive path", metadata: ["path": "\(rejectedPath)"])
+            }
+        }
+
+        log.debug("copy: copyIn complete", metadata: ["path": "\(path)", "isArchive": "\(isArchive)"])
+
+        // Send completion response.
+        try await response.write(.with { $0.status = .complete })
+    }
+
+    /// Handle a COPY_OUT request: stat path, send metadata, connect to host vsock port, write data.
+    private func handleCopyOut(
+        request: Com_Apple_Containerization_Sandbox_V3_CopyRequest,
+        response: GRPCCore.RPCWriter<Com_Apple_Containerization_Sandbox_V3_CopyResponse>
+    ) async throws {
+        let path = request.path
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) else {
+            throw RPCError(code: .notFound, message: "copy: path not found '\(path)'")
+        }
+        let isArchive = isDirectory.boolValue
+
+        // Determine total size for single files.
+        var totalSize: UInt64 = 0
+        if !isArchive {
+            let attrs = try FileManager.default.attributesOfItem(atPath: path)
+            if let size = attrs[.size] as? UInt64 {
+                totalSize = size
+            }
+        }
+
+        // Send metadata response BEFORE connecting to vsock, so host knows what to expect.
+        try await response.write(
+            .with {
+                $0.status = .metadata
+                $0.isArchive = isArchive
+                $0.totalSize = totalSize
+            })
+
+        // Connect to the host's vsock port and dispatch blocking I/O onto the thread pool.
+        let vsockType = VsockType(port: request.vsockPort, cid: VsockType.hostCID)
+        let sock = try Socket(type: vsockType, closeOnDeinit: false)
+        try sock.connect()
+
+        try await blockingPool.runIfActive { [self] in
+            defer { try? sock.close() }
+
+            if isArchive {
+                let fileURL = URL(fileURLWithPath: path)
+                let writer = try ArchiveWriter(configuration: .init(format: .pax, filter: .gzip))
+                try writer.open(fileDescriptor: sock.fileDescriptor)
+                try writer.archiveDirectory(fileURL)
+                try writer.finishEncoding()
+            } else {
+                let srcFd = open(path, O_RDONLY)
+                guard srcFd != -1 else {
+                    throw RPCError(
+                        code: .internalError,
+                        message: "copy: failed to open '\(path)': \(swiftErrno("open"))"
+                    )
+                }
+                defer { close(srcFd) }
+
+                var buf = [UInt8](repeating: 0, count: Self.copyChunkSize)
+                while true {
+                    let n = read(srcFd, &buf, buf.count)
+                    if n == 0 { break }
+                    guard n > 0 else {
+                        throw RPCError(
+                            code: .internalError,
+                            message: "copy: read error: \(swiftErrno("read"))"
+                        )
+                    }
+                    var written = 0
+                    while written < n {
+                        let w = buf.withUnsafeBytes { ptr in
+                            write(sock.fileDescriptor, ptr.baseAddress! + written, n - written)
+                        }
+                        guard w > 0 else {
+                            throw RPCError(
+                                code: .internalError,
+                                message: "copy: vsock write error: \(swiftErrno("write"))"
+                            )
+                        }
+                        written += w
+                    }
+                }
+            }
+        }
+
+        log.debug(
+            "copy: copyOut complete",
+            metadata: [
+                "path": "\(path)",
+                "isArchive": "\(isArchive)",
+            ])
+
+        // Send completion response after vsock data transfer is done.
+        try await response.write(.with { $0.status = .complete })
+    }
+
+    public func mount(request: Com_Apple_Containerization_Sandbox_V3_MountRequest, context: GRPCCore.ServerContext)
+        async throws -> Com_Apple_Containerization_Sandbox_V3_MountResponse
+    {
+        log.debug(
+            "mount",
+            metadata: [
+                "type": "\(request.type)",
+                "source": "\(request.source)",
+                "destination": "\(request.destination)",
+                "options": "\(request.options)",
+            ])
+
+        do {
+            // ARCA PATCH: skip block device mounts — they are already mounted during boot.
+            // ArcaBoot.prepareOverlayFS mounts /dev/vdb (writable) at /mnt/writable and
+            // /dev/vdc+ (layers) at /mnt/layer{N}. The OCI runtime must not mount them again.
+            if request.source.hasPrefix("/dev/vd") && request.source != "/dev" {
+                log.info(
+                    "Skipping block device mount (already mounted during boot)",
+                    metadata: [
+                        "source": "\(request.source)",
+                        "destination": "\(request.destination)",
+                    ])
+                return .init()
+            }
+
+            // ARCA PATCH: detect the rootfs mount request (a bind from / to
+            // /run/container/{id}/rootfs) and mount OverlayFS directly at that path rather
+            // than bind mounting. Mounting the overlay at / during boot instead would make
+            // the rootfs read-only; see ArcaBoot.
+            if request.type == "none" && request.options.contains("bind") && request.source == "/"
+                && request.destination.contains("/rootfs")
+            {
+                log.info(
+                    "Mounting OverlayFS at rootfs path",
+                    metadata: [
+                        "destination": "\(request.destination)"
+                    ])
+
+                guard let opts = await OverlayFSConfig.shared.mountOptions else {
+                    log.error("OverlayFS mount options not available")
+                    // grpc-swift v2 (GRPCCore) replaced GRPCStatus with RPCError upstream.
+                    throw RPCError(code: .internalError, message: "OverlayFS mount options not available")
+                }
+
+                try FileManager.default.createDirectory(
+                    atPath: request.destination,
+                    withIntermediateDirectories: true
+                )
+
+                guard Musl.mount("overlay", request.destination, "overlay", 0, opts) == 0 else {
+                    log.error(
+                        "Failed to mount OverlayFS",
+                        metadata: [
+                            "destination": "\(request.destination)",
+                            "errno": "\(errno)",
+                        ])
+                    throw RPCError(code: .internalError, message: "failed to mount OverlayFS: errno \(errno)")
+                }
+
+                log.info(
+                    "OverlayFS mounted at rootfs",
+                    metadata: [
+                        "destination": "\(request.destination)"
+                    ])
+
+                return .init()
+            }
+
+            // Other mounts (proc, sys, tmpfs, ...) use the existing logic.
+            let mnt = ContainerizationOS.Mount(
+                type: request.type,
+                source: request.source,
+                target: request.destination,
+                options: request.options
+            )
+
+            #if os(Linux)
+            do {
+                try mnt.mount(createWithPerms: 0o755)
+            } catch {
+                // A hot-plugged virtio device (virtio-blk / virtio-fs) may not
+                // be enumerated by the guest yet when the host issues this
+                // mount immediately after vm.add-disk / vm.add-fs: cloud-
+                // hypervisor places the device on the PCI bus but the guest
+                // does not always auto-probe it. Force a PCI rescan and retry
+                // with a bounded wait. Scoped to hot-plug-candidate sources so
+                // an ordinary mount failure isn't delayed.
+                let hotplugCandidate = request.type == "virtiofs" || request.source.hasPrefix("/dev/vd")
+                guard hotplugCandidate else { throw error }
+
+                if let rescan = FileHandle(forWritingAtPath: "/sys/bus/pci/rescan") {
+                    defer { try? rescan.close() }
+                    do {
+                        try rescan.write(contentsOf: Data("1".utf8))
+                        log.info("mount: triggered PCI bus rescan for hot-plugged device")
+                    } catch {
+                        log.error("mount: PCI rescan write failed", metadata: ["error": "\(error)"])
+                    }
+                } else {
+                    log.error("mount: cannot open /sys/bus/pci/rescan")
+                }
+
+                var mounted = false
+                for attempt in 1...20 {  // up to ~2s for the device to enumerate
+                    try? await Task.sleep(for: .milliseconds(100))
+                    do {
+                        try mnt.mount(createWithPerms: 0o755)
+                        log.info("mount: succeeded after PCI rescan", metadata: ["attempt": "\(attempt)"])
+                        mounted = true
+                        break
+                    } catch {
+                        continue
+                    }
+                }
+                if !mounted {
+                    throw error
+                }
+            }
+            return .init()
+            #else
+            fatalError("mount not supported on platform")
+            #endif
+        } catch {
+            log.error(
+                "mount",
+                metadata: [
+                    "error": "\(error)"
+                ])
+            throw RPCError(code: .internalError, message: "mount", cause: error)
+        }
+    }
+
+    public func filesystemOperation(request: Com_Apple_Containerization_Sandbox_V3_FilesystemOperationRequest, context: GRPCCore.ServerContext)
+        async throws -> Com_Apple_Containerization_Sandbox_V3_FilesystemOperationResponse
+    {
+        let path = FilePath(request.path)
+
+        log.debug(
+            "filesystemOperation",
+            metadata: [
+                "operation": "\(String(describing: request.operation))",
+                "path": "\(path)",
+            ])
+
+        if !path.isAbsolute {
+            throw RPCError(code: .invalidArgument, message: "path must be absolute")
+        }
+
+        var finfo = _stat_struct()
+        let rc = _stat(path.string, &finfo)
+        if rc != 0 {
+            let error = swiftErrno("stat")
+            throw RPCError(code: .notFound, message: "failed to stat path", cause: error)
+        }
+
+        let fd = open(path.string, O_RDONLY | O_NOFOLLOW)
+        if fd < 0 {
+            if errno == ELOOP {
+                throw RPCError(code: .internalError, message: "path cannot be a symlink")
+            }
+            let error = swiftErrno("open")
+            throw RPCError(code: .internalError, message: "failed to open path", cause: error)
+        }
+
+        defer { close(fd) }
+
+        do {
+            switch request.operation {
+            case .freeze:
+                try freezeFilesystem(fd: fd)
+            case .thaw:
+                try thawFilesystem(fd: fd)
+            case .trim(let params):
+                switch params.schedule {
+                case .oneShot:
+                    try trimFilesystem(fd: fd)
+                case .none:
+                    throw RPCError(code: .invalidArgument, message: "trim schedule must be specified")
+                }
+            case .none:
+                throw RPCError(code: .invalidArgument, message: "invalid operation")
+            }
+        } catch {
+            log.error(
+                "filesystemOperation",
+                metadata: [
+                    "error": "\(error)"
+                ])
+            throw RPCError(code: .internalError, message: "filesystemOperation", cause: error)
+        }
+
+        return .init()
+    }
+
+    private func freezeFilesystem(fd: Int32) throws {
+        let FIFREEZE: UInt = 0xC004_5877
+        let rc: CInt = ioctl(fd, FIFREEZE, 0)
+        if rc != 0 {
+            let error = swiftErrno("ioctl(FIFREEZE)")
+            throw RPCError(code: .internalError, message: "freeze failed", cause: error)
+        }
+    }
+
+    private func thawFilesystem(fd: Int32) throws {
+        let FITHAW: UInt = 0xC004_5878
+        let rc: CInt = ioctl(fd, FITHAW, 0)
+        if rc != 0 {
+            let error = swiftErrno("ioctl(FITHAW)")
+            throw RPCError(code: .internalError, message: "thaw failed", cause: error)
+        }
+    }
+
+    private struct fitrim_range {
+        var start: UInt64
+        var len: UInt64
+        var min_len: UInt64
+    }
+
+    private func trimFilesystem(fd: Int32) throws {
+        let FITRIM: UInt = 0xC018_5879
+        var trange = fitrim_range(start: 0, len: UInt64.max, min_len: 0)
+        let rc: CInt = ioctl(fd, FITRIM, &trange)
+        if rc != 0 {
+            let error = swiftErrno("ioctl(FITRIM)")
+            throw RPCError(code: .internalError, message: "trim failed", cause: error)
+        }
+    }
+
+    public func umount(request: Com_Apple_Containerization_Sandbox_V3_UmountRequest, context: GRPCCore.ServerContext)
+        async throws -> Com_Apple_Containerization_Sandbox_V3_UmountResponse
+    {
+        log.debug(
+            "umount",
+            metadata: [
+                "path": "\(request.path)",
+                "flags": "\(request.flags)",
+            ])
+
+        #if os(Linux)
+        // Best effort EBUSY handle.
+        for _ in 0...50 {
+            let result = _umount(request.path, request.flags)
+            if result == -1 {
+                if errno == EBUSY {
+                    try await Task.sleep(for: .milliseconds(10))
+                    continue
+                }
+                let error = swiftErrno("umount")
+
+                log.error(
+                    "umount",
+                    metadata: [
+                        "error": "\(error)"
+                    ])
+                throw RPCError(code: .invalidArgument, message: "umount", cause: error)
+            }
+            break
+        }
+        return .init()
+        #else
+        fatalError("umount not supported on platform")
+        #endif
+    }
+
+    public func setenv(request: Com_Apple_Containerization_Sandbox_V3_SetenvRequest, context: GRPCCore.ServerContext)
+        async throws -> Com_Apple_Containerization_Sandbox_V3_SetenvResponse
+    {
+        log.debug(
+            "setenv",
+            metadata: [
+                "key": "\(request.key)",
+                "value": "\(request.value)",
+            ])
+
+        guard _setenv(request.key, request.value, 1) == 0 else {
+            let error = swiftErrno("setenv")
+
+            log.error(
+                "setEnv",
+                metadata: [
+                    "error": "\(error)"
+                ])
+
+            throw RPCError(code: .invalidArgument, message: "setenv", cause: error)
+        }
+        return .init()
+    }
+
+    public func getenv(request: Com_Apple_Containerization_Sandbox_V3_GetenvRequest, context: GRPCCore.ServerContext)
+        async throws -> Com_Apple_Containerization_Sandbox_V3_GetenvResponse
+    {
+        log.debug(
+            "getenv",
+            metadata: [
+                "key": "\(request.key)"
+            ])
+
+        let env = ProcessInfo.processInfo.environment[request.key]
+        return .with {
+            if let env {
+                $0.value = env
+            }
+        }
+    }
+
+    public func createProcess(
+        request: Com_Apple_Containerization_Sandbox_V3_CreateProcessRequest, context: GRPCCore.ServerContext
+    ) async throws -> Com_Apple_Containerization_Sandbox_V3_CreateProcessResponse {
+        log.debug(
+            "createProcess",
+            metadata: [
+                "id": "\(request.id)",
+                "containerID": "\(request.containerID)",
+                "stdin": "Port: \(request.stdin)",
+                "stdout": "Port: \(request.stdout)",
+                "stderr": "Port: \(request.stderr)",
+            ])
+
+        do {
+            if !request.hasContainerID {
+                throw ContainerizationError(
+                    .invalidArgument,
+                    message: "processes in the root of the vm not implemented"
+                )
+            }
+
+            var ociSpec = try JSONDecoder().decode(
+                ContainerizationOCI.Spec.self,
+                from: request.configuration
+            )
+
+            try ociAlterations(id: request.id, ociSpec: &ociSpec)
+
+            guard let process = ociSpec.process else {
+                throw ContainerizationError(
+                    .invalidArgument,
+                    message: "oci runtime spec missing process configuration"
+                )
+            }
+
+            let stdioPorts = HostStdio(
+                stdin: request.hasStdin ? request.stdin : nil,
+                stdout: request.hasStdout ? request.stdout : nil,
+                stderr: request.hasStderr ? request.stderr : nil,
+                terminal: process.terminal
+            )
+
+            // This is an exec.
+            if let container = await self.state.containers[request.containerID] {
+                try await container.createExec(
+                    id: request.id,
+                    stdio: stdioPorts,
+                    process: process
+                )
+            } else {
+                // We need to make our new fangled container.
+                // The process ID must match the container ID for this.
+                guard request.id == request.containerID else {
+                    throw ContainerizationError(
+                        .invalidArgument,
+                        message: "init process id must match container id"
+                    )
+                }
+
+                // Write the etc/hostname file in the container rootfs since some init-systems
+                // depend on it.
+                let hostname = ociSpec.hostname
+                if let root = ociSpec.root, !hostname.isEmpty {
+                    let etc = URL(fileURLWithPath: root.path).appendingPathComponent("etc")
+                    try FileManager.default.createDirectory(atPath: etc.path, withIntermediateDirectories: true)
+                    let hostnamePath = etc.appendingPathComponent("hostname")
+                    try hostname.write(toFile: hostnamePath.path, atomically: true, encoding: .utf8)
+                }
+
+                // ARCA: DNS configuration (resolv.conf) is written by the WireGuard service in
+                // arca-services when the first network is added (AddNetwork RPC), because it
+                // needs the WireGuard gateway IP (e.g. 172.18.0.1), which is only known after
+                // network configuration completes. Until then the vmnet resolv.conf, pointing
+                // at control-plane DNS, stays in place for internet DNS resolution.
+
+                let ctr = try await ManagedContainer(
+                    id: request.id,
+                    stdio: stdioPorts,
+                    spec: ociSpec,
+                    ociRuntimePath: request.hasOciRuntimePath ? request.ociRuntimePath : nil,
+                    log: self.log
+                )
+                try await self.state.add(container: ctr)
+            }
+
+            return .init()
+        } catch let err as ContainerizationError {
+            log.error(
+                "createProcess",
+                metadata: [
+                    "id": "\(request.id)",
+                    "containerID": "\(request.containerID)",
+                    "error": "\(err)",
+                ])
+            throw err.toRPCError(operation: "createProcess: failed to create process")
+        } catch {
+            log.error(
+                "createProcess",
+                metadata: [
+                    "id": "\(request.id)",
+                    "containerID": "\(request.containerID)",
+                    "error": "\(error)",
+                ])
+            if error is RPCError {
+                throw error
+            }
+            throw RPCError(code: .internalError, message: "createProcess: \(error)", cause: error)
+        }
+    }
+
+    public func killProcess(
+        request: Com_Apple_Containerization_Sandbox_V3_KillProcessRequest,
+        context: GRPCCore.ServerContext
+    ) async throws -> Com_Apple_Containerization_Sandbox_V3_KillProcessResponse {
+        log.debug(
+            "killProcess",
+            metadata: [
+                "id": "\(request.id)",
+                "containerID": "\(request.containerID)",
+                "signal": "\(request.signal)",
+            ])
+
+        do {
+            if !request.hasContainerID {
+                throw ContainerizationError(
+                    .invalidArgument,
+                    message: "processes in the root of the vm not implemented"
+                )
+            }
+
+            let ctr = try await self.state.get(container: request.containerID)
+            try await ctr.kill(execID: request.id, request.signal)
+
+            return .init()
+        } catch let err as ContainerizationError {
+            log.error(
+                "killProcess",
+                metadata: [
+                    "id": "\(request.id)",
+                    "containerID": "\(request.containerID)",
+                    "error": "\(err)",
+                ])
+            throw err.toRPCError(operation: "killProcess: failed to kill process")
+        } catch {
+            log.error(
+                "killProcess",
+                metadata: [
+                    "id": "\(request.id)",
+                    "containerID": "\(request.containerID)",
+                    "error": "\(error)",
+                ])
+            throw RPCError(code: .internalError, message: "killProcess: failed to kill process: \(error)")
+        }
+    }
+
+    public func deleteProcess(
+        request: Com_Apple_Containerization_Sandbox_V3_DeleteProcessRequest, context: GRPCCore.ServerContext
+    ) async throws -> Com_Apple_Containerization_Sandbox_V3_DeleteProcessResponse {
+        log.debug(
+            "deleteProcess",
+            metadata: [
+                "id": "\(request.id)",
+                "containerID": "\(request.containerID)",
+            ])
+
+        do {
+            if !request.hasContainerID {
+                throw ContainerizationError(
+                    .invalidArgument,
+                    message: "processes in the root of the vm not implemented"
+                )
+            }
+
+            let ctr = try await self.state.get(container: request.containerID)
+
+            // Are we trying to delete the container itself?
+            if request.id == request.containerID {
+                try await ctr.delete()
+                try await state.remove(container: request.id)
+            } else {
+                // Or just a single exec.
+                try await ctr.deleteExec(id: request.id)
+            }
+
+            return .init()
+        } catch let err as ContainerizationError {
+            log.error(
+                "deleteProcess",
+                metadata: [
+                    "id": "\(request.id)",
+                    "containerID": "\(request.containerID)",
+                    "error": "\(err)",
+                ])
+            throw err.toRPCError(operation: "deleteProcess: failed to delete process")
+        } catch {
+            log.error(
+                "deleteProcess",
+                metadata: [
+                    "id": "\(request.id)",
+                    "containerID": "\(request.containerID)",
+                    "error": "\(error)",
+                ])
+            throw RPCError(
+                code: .internalError,
+                message: "deleteProcess: \(error)"
+            )
+        }
+    }
+
+    public func startProcess(
+        request: Com_Apple_Containerization_Sandbox_V3_StartProcessRequest, context: GRPCCore.ServerContext
+    ) async throws -> Com_Apple_Containerization_Sandbox_V3_StartProcessResponse {
+        log.debug(
+            "startProcess",
+            metadata: [
+                "id": "\(request.id)",
+                "containerID": "\(request.containerID)",
+            ])
+
+        do {
+            if !request.hasContainerID {
+                throw ContainerizationError(
+                    .invalidArgument,
+                    message: "processes in the root of the vm not implemented"
+                )
+            }
+
+            let ctr = try await self.state.get(container: request.containerID)
+            let pid = try await ctr.start(execID: request.id)
+
+            return .with {
+                $0.pid = pid
+            }
+        } catch let err as ContainerizationError {
+            log.error(
+                "startProcess",
+                metadata: [
+                    "id": "\(request.id)",
+                    "containerID": "\(request.containerID)",
+                    "error": "\(err)",
+                ])
+            throw err.toRPCError(operation: "startProcess: failed to start process")
+        } catch {
+            log.error(
+                "startProcess",
+                metadata: [
+                    "id": "\(request.id)",
+                    "containerID": "\(request.containerID)",
+                    "error": "\(error)",
+                ])
+            throw RPCError(
+                code: .internalError,
+                message: "startProcess: failed to start process",
+                cause: error
+            )
+        }
+    }
+
+    public func resizeProcess(
+        request: Com_Apple_Containerization_Sandbox_V3_ResizeProcessRequest, context: GRPCCore.ServerContext
+    ) async throws -> Com_Apple_Containerization_Sandbox_V3_ResizeProcessResponse {
+        log.debug(
+            "resizeProcess",
+            metadata: [
+                "id": "\(request.id)",
+                "containerID": "\(request.containerID)",
+            ])
+
+        do {
+            if !request.hasContainerID {
+                throw ContainerizationError(
+                    .invalidArgument,
+                    message: "processes in the root of the vm not implemented"
+                )
+            }
+
+            let ctr = try await self.state.get(container: request.containerID)
+            let size = Terminal.Size(
+                width: UInt16(request.columns),
+                height: UInt16(request.rows)
+            )
+            try await ctr.resize(execID: request.id, size: size)
+        } catch let err as ContainerizationError {
+            log.error(
+                "resizeProcess",
+                metadata: [
+                    "id": "\(request.id)",
+                    "containerID": "\(request.containerID)",
+                    "error": "\(err)",
+                ])
+            throw err.toRPCError(operation: "resizeProcess: failed to resize process")
+        } catch {
+            log.error(
+                "resizeProcess",
+                metadata: [
+                    "id": "\(request.id)",
+                    "containerID": "\(request.containerID)",
+                    "error": "\(error)",
+                ])
+            throw RPCError(
+                code: .internalError,
+                message: "resizeProcess: failed to resize process",
+                cause: error
+            )
+        }
+
+        return .init()
+    }
+
+    public func waitProcess(
+        request: Com_Apple_Containerization_Sandbox_V3_WaitProcessRequest, context: GRPCCore.ServerContext
+    ) async throws -> Com_Apple_Containerization_Sandbox_V3_WaitProcessResponse {
+        log.debug(
+            "waitProcess",
+            metadata: [
+                "id": "\(request.id)",
+                "containerID": "\(request.containerID)",
+            ])
+
+        do {
+            if !request.hasContainerID {
+                throw ContainerizationError(
+                    .invalidArgument,
+                    message: "processes in the root of the vm not implemented"
+                )
+            }
+
+            let ctr = try await self.state.get(container: request.containerID)
+            let exitStatus = try await ctr.wait(execID: request.id)
+
+            return .with {
+                $0.exitCode = exitStatus.exitCode
+                $0.exitedAt = Google_Protobuf_Timestamp(date: exitStatus.exitedAt)
+            }
+        } catch let err as ContainerizationError {
+            log.error(
+                "waitProcess",
+                metadata: [
+                    "id": "\(request.id)",
+                    "containerID": "\(request.containerID)",
+                    "error": "\(err)",
+                ])
+            throw err.toRPCError(operation: "waitProcess: failed to wait on process")
+        } catch {
+            log.error(
+                "waitProcess",
+                metadata: [
+                    "id": "\(request.id)",
+                    "containerID": "\(request.containerID)",
+                    "error": "\(error)",
+                ])
+            throw RPCError(
+                code: .internalError,
+                message: "waitProcess: failed to wait on process",
+                cause: error
+            )
+        }
+    }
+
+    public func closeProcessStdin(
+        request: Com_Apple_Containerization_Sandbox_V3_CloseProcessStdinRequest, context: GRPCCore.ServerContext
+    ) async throws -> Com_Apple_Containerization_Sandbox_V3_CloseProcessStdinResponse {
+        log.debug(
+            "closeProcessStdin",
+            metadata: [
+                "id": "\(request.id)",
+                "containerID": "\(request.containerID)",
+            ])
+
+        do {
+            if !request.hasContainerID {
+                throw ContainerizationError(
+                    .invalidArgument,
+                    message: "processes in the root of the vm not implemented"
+                )
+            }
+
+            let ctr = try await self.state.get(container: request.containerID)
+
+            try await ctr.closeStdin(execID: request.id)
+
+            return .init()
+        } catch let err as ContainerizationError {
+            log.error(
+                "closeProcessStdin",
+                metadata: [
+                    "id": "\(request.id)",
+                    "containerID": "\(request.containerID)",
+                    "error": "\(err)",
+                ])
+            throw err.toRPCError(operation: "closeProcessStdin: failed to close process stdin")
+        } catch {
+            log.error(
+                "closeProcessStdin",
+                metadata: [
+                    "id": "\(request.id)",
+                    "containerID": "\(request.containerID)",
+                    "error": "\(error)",
+                ])
+            throw RPCError(
+                code: .internalError,
+                message: "closeProcessStdin: failed to close process stdin",
+                cause: error
+            )
+        }
+    }
+
+    public func ipLinkSet(
+        request: Com_Apple_Containerization_Sandbox_V3_IpLinkSetRequest, context: GRPCCore.ServerContext
+    ) async throws -> Com_Apple_Containerization_Sandbox_V3_IpLinkSetResponse {
+        log.debug(
+            "ipLinkSet",
+            metadata: [
+                "interface": "\(request.interface)",
+                "up": "\(request.up)",
+            ])
+
+        do {
+            let socket = try DefaultNetlinkSocket()
+            let session = NetlinkSession(socket: socket, log: log)
+            let mtuValue: UInt32? = request.hasMtu ? request.mtu : nil
+            try session.linkSet(interface: request.interface, up: request.up, mtu: mtuValue)
+        } catch {
+            log.error(
+                "ipLinkSet",
+                metadata: [
+                    "error": "\(error)"
+                ])
+            throw RPCError(code: .internalError, message: "ipLinkSet", cause: error)
+        }
+
+        return .init()
+    }
+
+    public func ipAddrAdd(
+        request: Com_Apple_Containerization_Sandbox_V3_IpAddrAddRequest, context: GRPCCore.ServerContext
+    ) async throws -> Com_Apple_Containerization_Sandbox_V3_IpAddrAddResponse {
+        log.debug(
+            "ipAddrAdd",
+            metadata: [
+                "interface": "\(request.interface)",
+                "ipv4Address": "\(request.ipv4Address)",
+                "ipv6Address": "\(request.hasIpv6Address ? request.ipv6Address : "<none>")",
+            ])
+
+        do {
+            let socket = try DefaultNetlinkSocket()
+            let session = NetlinkSession(socket: socket, log: log)
+            let ipv4Address = try CIDRv4(request.ipv4Address)
+            try session.addressAdd(interface: request.interface, ipv4Address: ipv4Address)
+            if request.hasIpv6Address {
+                // Suppress SLAAC on this interface before adding the static
+                // address: the host would provide a static IPv6 config, this
+                // auto-derived IPv6 config would compete with the static one.
+                let confPath = URL(fileURLWithPath: "/proc/sys/net/ipv6/conf/\(request.interface)")
+                for key in ["accept_ra", "autoconf"] {
+                    let setting = confPath.appendingPathComponent(key)
+                    do {
+                        let fh = try FileHandle(forWritingTo: setting)
+                        defer { try? fh.close() }
+                        try fh.write(contentsOf: Data("0".utf8))
+                    } catch {
+                        log.warning(
+                            "ipAddrAdd: failed to disable IPv6 auto-configuration",
+                            metadata: [
+                                "path": "\(setting.path)",
+                                "error": "\(error)",
+                            ])
+                    }
+                }
+
+                let ipv6Address = try CIDRv6(request.ipv6Address)
+                try session.addressAdd(interface: request.interface, ipv6Address: ipv6Address)
+            }
+        } catch {
+            log.error(
+                "ipAddrAdd",
+                metadata: [
+                    "error": "\(error)"
+                ])
+            throw RPCError(code: .internalError, message: "ipAddrAdd", cause: error)
+        }
+
+        return .init()
+    }
+
+    public func ipRouteAddLink(
+        request: Com_Apple_Containerization_Sandbox_V3_IpRouteAddLinkRequest, context: GRPCCore.ServerContext
+    ) async throws -> Com_Apple_Containerization_Sandbox_V3_IpRouteAddLinkResponse {
+        log.debug(
+            "ipRouteAddLink",
+            metadata: [
+                "interface": "\(request.interface)",
+                "dstIpv4Addr": "\(request.dstIpv4Addr)",
+                "srcIpv4Addr": "\(request.srcIpv4Addr)",
+                "dstIpv6Addr": "\(request.hasDstIpv6Addr ? request.dstIpv6Addr : "<none>")",
+                "srcIpv6Addr": "\(request.hasSrcIpv6Addr ? request.srcIpv6Addr : "<none>")",
+            ])
+
+        guard !request.dstIpv4Addr.isEmpty || request.hasDstIpv6Addr else {
+            throw RPCError(
+                code: .invalidArgument,
+                message: "ipRouteAddLink requires at least one of dstIpv4Addr or dstIpv6Addr"
+            )
+        }
+
+        do {
+            let socket = try DefaultNetlinkSocket()
+            let session = NetlinkSession(socket: socket, log: log)
+            if !request.dstIpv4Addr.isEmpty {
+                let dstIpv4Addr = try CIDRv4(request.dstIpv4Addr)
+                let srcIpv4Addr = request.srcIpv4Addr.isEmpty ? nil : try IPv4Address(request.srcIpv4Addr)
+                try session.routeAdd(
+                    interface: request.interface,
+                    dstIpv4Addr: dstIpv4Addr,
+                    srcIpv4Addr: srcIpv4Addr
+                )
+            }
+            if request.hasDstIpv6Addr {
+                let dstIpv6Addr = try CIDRv6(request.dstIpv6Addr)
+                let srcIpv6Addr = request.hasSrcIpv6Addr ? try IPv6Address(request.srcIpv6Addr) : nil
+                try session.routeAdd(
+                    interface: request.interface,
+                    dstIpv6Addr: dstIpv6Addr,
+                    srcIpv6Addr: srcIpv6Addr
+                )
+            }
+        } catch {
+            log.error(
+                "ipRouteAddLink",
+                metadata: [
+                    "error": "\(error)"
+                ])
+            throw RPCError(code: .internalError, message: "ipRouteAddLink", cause: error)
+        }
+
+        return .init()
+    }
+
+    public func ipRouteAddDefault(
+        request: Com_Apple_Containerization_Sandbox_V3_IpRouteAddDefaultRequest,
+        context: GRPCCore.ServerContext
+    ) async throws -> Com_Apple_Containerization_Sandbox_V3_IpRouteAddDefaultResponse {
+        log.debug(
+            "ipRouteAddDefault",
+            metadata: [
+                "interface": "\(request.interface)",
+                "ipv4Gateway": "\(request.ipv4Gateway)",
+                "ipv6Gateway": "\(request.hasIpv6Gateway ? request.ipv6Gateway : "<none>")",
+            ])
+
+        do {
+            let socket = try DefaultNetlinkSocket()
+            let session = NetlinkSession(socket: socket, log: log)
+            if !request.ipv4Gateway.isEmpty {
+                let ipv4Gateway = try IPv4Address(request.ipv4Gateway)
+                try session.routeAddDefault(interface: request.interface, ipv4Gateway: ipv4Gateway)
+            } else if !request.hasIpv6Gateway {
+                // No v4 gateway and no v6 either: install a v4 default route
+                // with no gateway (preserves pre-IPv6 behavior).
+                try session.routeAddDefault(interface: request.interface, ipv4Gateway: nil)
+            }
+            if request.hasIpv6Gateway {
+                let ipv6Gateway = try IPv6Address(request.ipv6Gateway)
+                try session.routeAddDefault(interface: request.interface, ipv6Gateway: ipv6Gateway)
+            }
+        } catch {
+            log.error(
+                "ipRouteAddDefault",
+                metadata: [
+                    "error": "\(error)"
+                ])
+            throw RPCError(code: .internalError, message: "ipRouteAddDefault", cause: error)
+        }
+
+        return .init()
+    }
+
+    public func configureDns(
+        request: Com_Apple_Containerization_Sandbox_V3_ConfigureDnsRequest,
+        context: GRPCCore.ServerContext
+    ) async throws -> Com_Apple_Containerization_Sandbox_V3_ConfigureDnsResponse {
+        let domain = request.hasDomain ? request.domain : nil
+        log.debug(
+            "configureDns",
+            metadata: [
+                "location": "\(request.location)",
+                "nameservers": "\(request.nameservers)",
+                "domain": "\(domain ?? "")",
+                "searchDomains": "\(request.searchDomains)",
+                "options": "\(request.options)",
+            ])
+
+        do {
+            let etc = URL(fileURLWithPath: request.location).appendingPathComponent("etc")
+            try FileManager.default.createDirectory(atPath: etc.path, withIntermediateDirectories: true)
+            let resolvConf = etc.appendingPathComponent("resolv.conf")
+            let config = DNS(
+                nameservers: request.nameservers,
+                domain: domain,
+                searchDomains: request.searchDomains,
+                options: request.options
+            )
+            let text = config.resolvConf
+            log.debug("writing to path \(resolvConf.path) \(text)")
+            try text.write(toFile: resolvConf.path, atomically: true, encoding: .utf8)
+            log.debug("wrote resolver configuration", metadata: ["path": "\(resolvConf.path)"])
+        } catch {
+            log.error(
+                "configureDns",
+                metadata: [
+                    "error": "\(error)"
+                ])
+            throw RPCError(code: .internalError, message: "configureDns", cause: error)
+        }
+
+        return .init()
+    }
+
+    public func configureHosts(
+        request: Com_Apple_Containerization_Sandbox_V3_ConfigureHostsRequest,
+        context: GRPCCore.ServerContext
+    ) async throws -> Com_Apple_Containerization_Sandbox_V3_ConfigureHostsResponse {
+        log.debug(
+            "configureHosts",
+            metadata: [
+                "location": "\(request.location)"
+            ])
+
+        do {
+            let etc = URL(fileURLWithPath: request.location).appendingPathComponent("etc")
+            try FileManager.default.createDirectory(atPath: etc.path, withIntermediateDirectories: true)
+            let hostsPath = etc.appendingPathComponent("hosts")
+
+            let config = request.toCZHosts()
+            let text = config.hostsFile
+            try text.write(toFile: hostsPath.path, atomically: true, encoding: .utf8)
+
+            log.debug("wrote /etc/hosts configuration", metadata: ["path": "\(hostsPath.path)"])
+        } catch {
+            log.error(
+                "configureHosts",
+                metadata: [
+                    "error": "\(error)"
+                ])
+            throw RPCError(code: .internalError, message: "configureHosts", cause: error)
+        }
+
+        return .init()
+    }
+
+    public func containerStatistics(
+        request: Com_Apple_Containerization_Sandbox_V3_ContainerStatisticsRequest,
+        context: GRPCCore.ServerContext
+    ) async throws -> Com_Apple_Containerization_Sandbox_V3_ContainerStatisticsResponse {
+        log.debug(
+            "containerStatistics",
+            metadata: [
+                "container_ids": "\(request.containerIds)",
+                "categories": "\(request.categories)",
+            ])
+
+        do {
+            // Parse requested categories (empty = all)
+            let categories = Set(request.categories)
+            let wantAll = categories.isEmpty
+            let wantProcess = wantAll || categories.contains(.process)
+            let wantMemory = wantAll || categories.contains(.memory)
+            let wantCPU = wantAll || categories.contains(.cpu)
+            let wantBlockIO = wantAll || categories.contains(.blockIo)
+            let wantNetwork = wantAll || categories.contains(.network)
+            let wantMemoryEvents = wantAll || categories.contains(.memoryEvents)
+
+            // Get all network interfaces (skip loopback) only if needed
+            let interfaces = wantNetwork ? try getNetworkInterfaces() : []
+
+            // Get containers to query
+            let containerIDs: [String]
+            if request.containerIds.isEmpty {
+                containerIDs = await Array(state.containers.keys)
+            } else {
+                containerIDs = request.containerIds
+            }
+
+            var containerStats: [Com_Apple_Containerization_Sandbox_V3_ContainerStats] = []
+
+            for containerID in containerIDs {
+                let container = try await state.get(container: containerID)
+
+                // Only read the cgroup stat groups that were requested.
+                var cgCategories: Cgroup2StatsCategory = []
+                if wantProcess { cgCategories.insert(.pids) }
+                if wantMemory { cgCategories.insert(.memory) }
+                if wantCPU { cgCategories.insert(.cpu) }
+                if wantBlockIO { cgCategories.insert(.io) }
+
+                let cgStats: Cgroup2Stats? = cgCategories.isEmpty ? nil : try await container.stats(cgCategories)
+
+                // Get network stats only if requested
+                var networkStats: [Com_Apple_Containerization_Sandbox_V3_NetworkStats] = []
+                if wantNetwork {
+                    let socket = try DefaultNetlinkSocket()
+                    let session = NetlinkSession(socket: socket, log: log)
+                    for interface in interfaces {
+                        let responses = try session.linkGet(interface: interface, includeStats: true)
+                        if responses.count == 1, let stats = try responses[0].getStatistics() {
+                            networkStats.append(
+                                .with {
+                                    $0.interface = interface
+                                    $0.receivedPackets = stats.rxPackets
+                                    $0.transmittedPackets = stats.txPackets
+                                    $0.receivedBytes = stats.rxBytes
+                                    $0.transmittedBytes = stats.txBytes
+                                    $0.receivedErrors = stats.rxErrors
+                                    $0.transmittedErrors = stats.txErrors
+                                })
+                        }
+                    }
+                }
+
+                // Get memory events only if requested
+                var memoryEvents: MemoryEvents?
+                if wantMemoryEvents {
+                    memoryEvents = try await container.getMemoryEvents()
+                }
+
+                containerStats.append(
+                    mapStatsToProto(
+                        containerID: containerID,
+                        cgStats: cgStats,
+                        networkStats: networkStats,
+                        memoryEvents: memoryEvents,
+                        wantProcess: wantProcess,
+                        wantMemory: wantMemory,
+                        wantCPU: wantCPU,
+                        wantBlockIO: wantBlockIO,
+                        wantNetwork: wantNetwork,
+                        wantMemoryEvents: wantMemoryEvents
+                    )
+                )
+            }
+
+            return .with {
+                $0.containers = containerStats
+            }
+        } catch {
+            log.error(
+                "containerStatistics",
+                metadata: [
+                    "error": "\(error)"
+                ])
+            throw RPCError(code: .internalError, message: "containerStatistics", cause: error)
+        }
+    }
+
+    private func swiftErrno(_ msg: Logger.Message) -> POSIXError {
+        let error = POSIXError(.init(rawValue: errno)!)
+        log.error(
+            msg,
+            metadata: [
+                "error": "\(error)"
+            ])
+        return error
+    }
+
+    // NOTE: This is just crummy. It works because today the assumption is
+    // every NIC in the root net namespace is for the container(s), but if we
+    // ever supported individual containers having their own NICs/IPs then this
+    // logic needs to change. We only create ethernet devices today too, so that's
+    // what this filters for as well.
+    private func getNetworkInterfaces() throws -> [String] {
+        let netPath = URL(filePath: "/sys/class/net")
+        let interfaces = try FileManager.default.contentsOfDirectory(
+            at: netPath,
+            includingPropertiesForKeys: nil
+        )
+        return
+            interfaces
+            .map { $0.lastPathComponent }
+            .filter { $0.hasPrefix("eth") }
+    }
+
+    private func mapStatsToProto(
+        containerID: String,
+        cgStats: Cgroup2Stats?,
+        networkStats: [Com_Apple_Containerization_Sandbox_V3_NetworkStats],
+        memoryEvents: MemoryEvents?,
+        wantProcess: Bool,
+        wantMemory: Bool,
+        wantCPU: Bool,
+        wantBlockIO: Bool,
+        wantNetwork: Bool,
+        wantMemoryEvents: Bool
+    ) -> Com_Apple_Containerization_Sandbox_V3_ContainerStats {
+        .with {
+            $0.containerID = containerID
+
+            if wantProcess, let pids = cgStats?.pids {
+                $0.process = .with {
+                    $0.current = pids.current
+                    $0.limit = pids.max ?? 0
+                }
+            }
+
+            if wantMemory, let memory = cgStats?.memory {
+                $0.memory = .with {
+                    $0.usageBytes = memory.usage
+                    $0.limitBytes = memory.usageLimit ?? 0
+                    $0.swapUsageBytes = memory.swapUsage ?? 0
+                    $0.swapLimitBytes = memory.swapLimit ?? 0
+                    $0.cacheBytes = memory.file
+                    $0.kernelStackBytes = memory.kernelStack
+                    $0.slabBytes = memory.slab
+                    $0.pageFaults = memory.pgfault
+                    $0.majorPageFaults = memory.pgmajfault
+                    $0.inactiveFile = memory.inactiveFile
+                    $0.anon = memory.anon
+                    $0.workingsetRefaultAnon = memory.workingsetRefaultAnon
+                    $0.workingsetRefaultFile = memory.workingsetRefaultFile
+                    $0.pgstealKswapd = memory.pgstealKswapd
+                    $0.pgstealDirect = memory.pgstealDirect
+                    $0.pgstealKhugepaged = memory.pgstealKhugepaged
+                }
+            }
+
+            if wantCPU, let cpu = cgStats?.cpu {
+                $0.cpu = .with {
+                    $0.usageUsec = cpu.usageUsec
+                    $0.userUsec = cpu.userUsec
+                    $0.systemUsec = cpu.systemUsec
+                    $0.throttlingPeriods = cpu.nrPeriods
+                    $0.throttledPeriods = cpu.nrThrottled
+                    $0.throttledTimeUsec = cpu.throttledUsec
+                }
+            }
+
+            if wantBlockIO, let io = cgStats?.io {
+                $0.blockIo = .with {
+                    $0.devices = io.entries.map { entry in
+                        .with {
+                            $0.major = entry.major
+                            $0.minor = entry.minor
+                            $0.readBytes = entry.rbytes
+                            $0.writeBytes = entry.wbytes
+                            $0.readOperations = entry.rios
+                            $0.writeOperations = entry.wios
+                        }
+                    }
+                }
+            }
+
+            if wantNetwork {
+                $0.networks = networkStats
+            }
+
+            if wantMemoryEvents, let events = memoryEvents {
+                $0.memoryEvents = .with {
+                    $0.low = events.low
+                    $0.high = events.high
+                    $0.max = events.max
+                    $0.oom = events.oom
+                    $0.oomKill = events.oomKill
+                }
+            }
+        }
+    }
+
+    public func sync(
+        request: Com_Apple_Containerization_Sandbox_V3_SyncRequest,
+        context: GRPCCore.ServerContext
+    ) async throws -> Com_Apple_Containerization_Sandbox_V3_SyncResponse {
+        log.debug("sync")
+
+        _sync()
+        return .init()
+    }
+
+    public func kill(
+        request: Com_Apple_Containerization_Sandbox_V3_KillRequest,
+        context: GRPCCore.ServerContext
+    ) async throws -> Com_Apple_Containerization_Sandbox_V3_KillResponse {
+        log.debug(
+            "kill",
+            metadata: [
+                "pid": "\(request.pid)",
+                "signal": "\(request.signal)",
+            ])
+
+        let r = _kill(request.pid, request.signal)
+        return .with {
+            $0.result = r
+        }
+    }
+}
+
+extension Com_Apple_Containerization_Sandbox_V3_ConfigureHostsRequest {
+    func toCZHosts() -> Hosts {
+        let entries = self.entries.map {
+            Hosts.Entry(
+                ipAddress: $0.ipAddress,
+                hostnames: $0.hostnames,
+                comment: $0.hasComment ? $0.comment : nil
+            )
+        }
+        return Hosts(
+            entries: entries,
+            comment: self.hasComment ? self.comment : nil
+        )
+    }
+}
+
+extension Initd {
+    func ociAlterations(id: String, ociSpec: inout ContainerizationOCI.Spec) throws {
+        guard var process = ociSpec.process else {
+            throw ContainerizationError(
+                .invalidArgument,
+                message: "runtime spec without process field present"
+            )
+        }
+        guard let root = ociSpec.root else {
+            throw ContainerizationError(
+                .invalidArgument,
+                message: "runtime spec without root field present"
+            )
+        }
+
+        if ociSpec.linux!.cgroupsPath.isEmpty {
+            ociSpec.linux!.cgroupsPath = "/container/\(id)"
+        }
+
+        if process.cwd.isEmpty {
+            process.cwd = "/"
+        }
+
+        // NOTE: The OCI runtime specs Username field is truthfully Windows exclusive, but we use this as a way
+        // to pass through the exact string representation of a username (or username:group, uid:group etc.) a client
+        // may have given us.
+        let username = process.user.username.isEmpty ? "\(process.user.uid):\(process.user.gid)" : process.user.username
+        let parsedUser = try User.getExecUser(
+            userString: username,
+            passwdPath: URL(filePath: root.path).appending(path: "etc/passwd"),
+            groupPath: URL(filePath: root.path).appending(path: "etc/group")
+        )
+        process.user.uid = parsedUser.uid
+        process.user.gid = parsedUser.gid
+        process.user.additionalGids.append(contentsOf: parsedUser.sgids)
+        process.user.additionalGids.append(process.user.gid)
+
+        var seenSuppGids = Set<UInt32>()
+        process.user.additionalGids = process.user.additionalGids.filter {
+            seenSuppGids.insert($0).inserted
+        }
+
+        if !process.env.contains(where: { $0.hasPrefix("PATH=") }) {
+            process.env.append("PATH=\(LinuxProcessConfiguration.defaultPath)")
+        }
+
+        if !process.env.contains(where: { $0.hasPrefix("HOME=") }) {
+            process.env.append("HOME=\(parsedUser.home)")
+        }
+
+        // Defensive programming a tad, but ensure we have TERM set if
+        // the client requested a pty.
+        if process.terminal {
+            let termEnv = "TERM="
+            if !process.env.contains(where: { $0.hasPrefix(termEnv) }) {
+                process.env.append("TERM=xterm")
+            }
+        }
+
+        // ARCA PATCH: honour ARCA_GROUP_ADD, which carries `--group-add` through to the
+        // guest. Values are comma-separated group names or numeric GIDs; names are resolved
+        // against the container's /etc/group. The variable is internal transport and is
+        // stripped from the process environment once applied.
+        if let groupAddEnv = process.env.first(where: { $0.hasPrefix("ARCA_GROUP_ADD=") }) {
+            let groupsString = String(groupAddEnv.dropFirst("ARCA_GROUP_ADD=".count))
+            let groups = groupsString.split(separator: ",").map(String.init)
+
+            for group in groups {
+                let trimmedGroup = group.trimmingCharacters(in: .whitespaces)
+                // Try parsing as a numeric GID first.
+                if let gid = UInt32(trimmedGroup) {
+                    if !process.user.additionalGids.contains(gid) {
+                        process.user.additionalGids.append(gid)
+                    }
+                } else {
+                    // Resolve the group name to a GID using /etc/group.
+                    do {
+                        let groupEntries = try User.parseGroup(
+                            groupFile: URL(filePath: root.path).appending(path: "etc/group"),
+                            filter: { g in g.name == trimmedGroup }
+                        )
+                        if let groupEntry = groupEntries.first {
+                            if !process.user.additionalGids.contains(groupEntry.gid) {
+                                process.user.additionalGids.append(groupEntry.gid)
+                            }
+                        } else {
+                            log.warning("Group name not found in /etc/group: \(trimmedGroup)")
+                        }
+                    } catch {
+                        // /etc/group doesn't exist or can't be read.
+                        log.warning("Failed to resolve group name '\(trimmedGroup)': \(error)")
+                    }
+                }
+            }
+
+            process.env.removeAll(where: { $0.hasPrefix("ARCA_GROUP_ADD=") })
+        }
+
+        ociSpec.process = process
+    }
+}
+
+#endif

@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright © 2025 Apple Inc. and the Containerization project authors.
+// Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
 //===----------------------------------------------------------------------===//
 
 import ContainerizationError
+import ContainerizationExtras
 import ContainerizationOCI
 import Foundation
 
@@ -22,6 +23,12 @@ public struct WriteFileFlags {
     public var createParentDirectories = false
     public var append = false
     public var create = false
+}
+
+public enum FilesystemOperation: Sendable {
+    case freeze
+    case thaw
+    case trim
 }
 
 /// A protocol for the agent running inside a virtual machine. If an operation isn't
@@ -33,6 +40,8 @@ public protocol VirtualMachineAgent: Sendable {
     func standardSetup() async throws
     /// Close any resources held by the agent.
     func close() async throws
+    // Perform a filesystem operation on the given path.
+    func filesystemOperation(operation: FilesystemOperation, path: String) async throws
 
     // POSIX-y
     func getenv(key: String) async throws -> String
@@ -66,13 +75,15 @@ public protocol VirtualMachineAgent: Sendable {
     // Networking
     func up(name: String, mtu: UInt32?) async throws
     func down(name: String) async throws
-    func addressAdd(name: String, address: String) async throws
-    func routeAddDefault(name: String, gateway: String) async throws
+    func addressAdd(name: String, address: InterfaceAddress) async throws
+    func routeAddLink(name: String, route: LinkRoute) async throws
+    func routeAddDefault(name: String, route: DefaultRoute) async throws
     func configureDNS(config: DNS, location: String) async throws
     func configureHosts(config: Hosts, location: String) async throws
 
     // Container statistics
-    func containerStatistics(containerIDs: [String]) async throws -> [ContainerStatistics]
+    func containerStatistics(containerIDs: [String], categories: StatCategory) async throws -> [ContainerStatistics]
+
 }
 
 extension VirtualMachineAgent {
@@ -88,11 +99,12 @@ extension VirtualMachineAgent {
         throw ContainerizationError(.unsupported, message: "writeFile")
     }
 
-    public func containerStatistics(containerIDs: [String]) async throws -> [ContainerStatistics] {
+    public func containerStatistics(containerIDs: [String], categories: StatCategory) async throws -> [ContainerStatistics] {
         throw ContainerizationError(.unsupported, message: "containerStatistics")
     }
 
     public func sync() async throws {
         throw ContainerizationError(.unsupported, message: "sync")
     }
+
 }

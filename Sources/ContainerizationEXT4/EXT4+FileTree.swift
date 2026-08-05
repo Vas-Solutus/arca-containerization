@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright © 2025 Apple Inc. and the Containerization project authors.
+// Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
 //===----------------------------------------------------------------------===//
 
 import Foundation
+import OrderedCollections
 import SystemPackage
 
 extension EXT4 {
@@ -22,11 +23,15 @@ extension EXT4 {
         class FileTreeNode {
             let inode: InodeNumber
             let name: String
-            var children: [Ptr<FileTreeNode>] = []
+            // Children keyed by name for O(1) lookup, preserving insertion order.
+            private(set) var childrenByName: OrderedDictionary<String, Ptr<FileTreeNode>> = [:]
+            var children: OrderedDictionary<String, Ptr<FileTreeNode>>.Values {
+                childrenByName.values
+            }
             var blocks: (start: UInt32, end: UInt32)?
             var additionalBlocks: [(start: UInt32, end: UInt32)]?
             var link: InodeNumber?
-            private var parent: Ptr<FileTreeNode>?
+            private weak var parent: Ptr<FileTreeNode>?
 
             init(
                 inode: InodeNumber,
@@ -39,16 +44,17 @@ extension EXT4 {
             ) {
                 self.inode = inode
                 self.name = name
-                self.children = children
                 self.blocks = blocks
                 self.additionalBlocks = additionalBlocks
                 self.link = link
                 self.parent = parent
+                for child in children {
+                    self.addChild(child)
+                }
             }
 
             deinit {
-                self.children.removeAll()
-                self.children = []
+                self.childrenByName.removeAll()
                 self.blocks = nil
                 self.additionalBlocks = nil
                 self.link = nil
@@ -61,29 +67,23 @@ extension EXT4 {
                     components.append(ptr.pointee.name)
                     _ptr = ptr.pointee.parent
                 }
-                guard let last = components.last else {
-                    return nil
-                }
-                guard components.count > 1 else {
-                    return FilePath(last)
-                }
-                components = components.dropLast()
                 let path = components.reversed().joined(separator: "/")
-                guard let data = path.data(using: .utf8) else {
-                    return nil
-                }
-                guard let dataPath = String(data: data, encoding: .utf8) else {
-                    return nil
-                }
-                return FilePath(dataPath).pushing(FilePath(last)).lexicallyNormalized()
+                return FilePath(path).lexicallyNormalized()
+            }
+
+            func addChild(_ child: Ptr<FileTreeNode>) {
+                childrenByName[child.pointee.name] = child
+            }
+
+            func removeChild(named name: String) {
+                childrenByName.removeValue(forKey: name)
             }
         }
 
         var root: Ptr<FileTreeNode>
 
         init(_ root: InodeNumber, _ name: String) {
-            self.root = Ptr<FileTreeNode>.allocate(capacity: 1)
-            self.root.initialize(to: FileTreeNode(inode: root, name: name, parent: nil))
+            self.root = Ptr(FileTreeNode(inode: root, name: name, parent: nil))
         }
 
         func lookup(path: FilePath) -> Ptr<FileTreeNode>? {
@@ -96,18 +96,10 @@ extension EXT4 {
                 return node
             }
             for component in components {
-                var found = false
-                for childPtr in node.pointee.children {
-                    let child = childPtr.pointee
-                    if child.name == component {
-                        node = childPtr
-                        found = true
-                        break
-                    }
-                }
-                guard found else {
+                guard let childPtr = node.pointee.childrenByName[component] else {
                     return nil
                 }
+                node = childPtr
             }
             return node
         }

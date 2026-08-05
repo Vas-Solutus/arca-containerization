@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright © 2025 Apple Inc. and the Containerization project authors.
+// Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -49,24 +49,12 @@ extension FilePath {
         self.components.map { $0.string }
     }
 
-    public init(_ url: URL) {
-        self.init(url.path(percentEncoded: false))
+    public var isRoot: Bool {  // platform agnostic
+        self.removingRoot().isEmpty
     }
 
-    public init?(_ data: Data) {
-        let cstr: String? = data.withUnsafeBytes { (rbp: UnsafeRawBufferPointer) in
-            guard let baseAddress = rbp.baseAddress else {
-                return nil
-            }
-
-            let cString = baseAddress.bindMemory(to: CChar.self, capacity: data.count)
-            return String(cString: cString)
-        }
-
-        guard let cstr else {
-            return nil
-        }
-        self.init(cstr)
+    public init(_ url: URL) {
+        self.init(url.path(percentEncoded: false))
     }
 
     public func join(_ path: FilePath) -> FilePath {

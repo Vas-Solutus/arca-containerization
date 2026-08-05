@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright © 2025 Apple Inc. and the Containerization project authors.
+// Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -28,12 +28,12 @@ extension EXT4 {
 
         public var description: String {
             switch self {
-            case .notFound(let p): return "No such file or directory: \(p)"
-            case .notAFile(let p): return "Not a regular file: \(p)"
-            case .isDirectory(let p): return "Is a directory: \(p)"
-            case .notADirectory(let p): return "Not a directory: \(p)"
-            case .symlinkLoop(let p): return "Symlink loop while resolving: \(p)"
-            case .invalidPath(let p): return "Invalid path: \(p)"
+            case .notFound(let p): return "no such file or directory: \(p)"
+            case .notAFile(let p): return "not a regular file: \(p)"
+            case .isDirectory(let p): return "is a directory: \(p)"
+            case .notADirectory(let p): return "not a directory: \(p)"
+            case .symlinkLoop(let p): return "symlink loop while resolving: \(p)"
+            case .invalidPath(let p): return "invalid path: \(p)"
             }
         }
     }
@@ -57,7 +57,7 @@ extension EXT4.EXT4Reader {
     /// Validate that a physical block address is within device bounds
     private func validateBlockAddress(_ block: UInt32) throws {
         guard UInt64(block) < totalBlocks else {
-            throw EXT4.PathIOError.invalidPath("Block address \(block) exceeds device bounds (\(totalBlocks) blocks)")
+            throw EXT4.PathIOError.invalidPath("block address \(block) exceeds device bounds (\(totalBlocks) blocks)")
         }
     }
 
@@ -220,7 +220,7 @@ extension EXT4.EXT4Reader {
                 if bytesWritten > 0 {
                     return bytesWritten
                 }
-                throw EXT4.PathIOError.invalidPath("Failed to seek to offset \(absoluteByteOffset): \(error)")
+                throw EXT4.PathIOError.invalidPath("failed to seek to offset \(absoluteByteOffset): \(error)")
             }
 
             while remaining > 0 && bytesWritten < desiredBytes {
@@ -281,7 +281,6 @@ extension EXT4.EXT4Reader {
         var parentStack: [EXT4.InodeNumber] = []  // Track parent chain for proper ".." handling
 
         var symlinkHops = 0
-        var visitedInodes = Set<EXT4.InodeNumber>()
 
         // Process components one at a time to handle symlinks in the middle of paths
         var componentIndex = 0
@@ -330,12 +329,6 @@ extension EXT4.EXT4Reader {
             // Check if child is a symlink
             let childInode = try getInode(number: child.1)
             if childInode.mode.isLink() && followSymlinks {
-                // Check for symlink loop
-                if visitedInodes.contains(child.1) {
-                    throw EXT4.PathIOError.symlinkLoop(FilePath(components.joined(separator: "/")).description)
-                }
-                visitedInodes.insert(child.1)
-
                 // Enforce max symlink depth
                 symlinkHops += 1
                 if symlinkHops > maxSymlinks {
@@ -345,7 +338,7 @@ extension EXT4.EXT4Reader {
                 // Read symlink target
                 let linkBytes = try readFileFromInode(inodeNum: child.1)
                 guard let linkTarget = String(data: linkBytes, encoding: .utf8), !linkTarget.isEmpty else {
-                    throw EXT4.PathIOError.invalidPath("Empty symlink target")
+                    throw EXT4.PathIOError.invalidPath("empty symlink target")
                 }
 
                 // Parse symlink target into components
@@ -376,70 +369,6 @@ extension EXT4.EXT4Reader {
         // All components processed - return final inode
         let finalInode = try getInode(number: current)
         return ResolvedPath(inodeNum: current, inode: finalInode)
-    }
-
-    /// Walk a sequence of path components from a starting inode with parent tracking.
-    /// Returns the final inode and updated parent stack.
-    private func walkWithParents(
-        current start: EXT4.InodeNumber,
-        components: [String],
-        parentStack initialStack: [EXT4.InodeNumber]
-    ) throws -> (EXT4.InodeNumber, [EXT4.InodeNumber]) {
-        var current = start
-        var parentStack = initialStack
-
-        if components.isEmpty { return (current, parentStack) }
-
-        for name in components {
-            if name == "." {
-                continue
-            }
-
-            if name == ".." {
-                // Handle parent directory traversal with proper tracking
-                if current == EXT4.RootInode {
-                    // At root, ".." points to itself (POSIX behavior)
-                    continue
-                }
-
-                // Use parent stack if available for accurate traversal
-                if !parentStack.isEmpty {
-                    current = parentStack.removeLast()
-                } else {
-                    // No parent tracking available - look up ".." entry in filesystem
-                    // This happens when we start traversal from a non-root inode
-                    let entries = try children(of: current)
-                    if let parent = entries.first(where: { $0.0 == ".." })?.1 {
-                        current = parent
-                    }
-                }
-                continue
-            }
-
-            // Regular component: verify current is a directory before traversing
-            let currentInode = try getInode(number: current)
-            guard currentInode.mode.isDir() else {
-                throw EXT4.PathIOError.notADirectory(name)
-            }
-
-            // Look up child in current directory
-            let entries = try children(of: current)
-            guard let child = entries.first(where: { $0.0 == name }) else {
-                throw EXT4.PathIOError.notFound(name)
-            }
-
-            // Push current to parent stack before descending
-            parentStack.append(current)
-            current = child.1
-        }
-
-        return (current, parentStack)
-    }
-
-    /// Walk a sequence of path components from a starting inode.
-    private func walk(current start: EXT4.InodeNumber, components: [String]) throws -> EXT4.InodeNumber {
-        let (result, _) = try walkWithParents(current: start, components: components, parentStack: [])
-        return result
     }
 
     /// Normalize a path into components, handling absolute and relative paths.
@@ -517,7 +446,7 @@ extension EXT4.EXT4Reader {
                     // Return partial data that was successfully read
                     return out
                 }
-                throw EXT4.PathIOError.invalidPath("Failed to seek to offset \(absByteOffset): \(error)")
+                throw EXT4.PathIOError.invalidPath("failed to seek to offset \(absByteOffset): \(error)")
             }
 
             var left = ovlLen

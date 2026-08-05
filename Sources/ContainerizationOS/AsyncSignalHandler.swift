@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright © 2025 Apple Inc. and the Containerization project authors.
+// Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,8 +14,16 @@
 // limitations under the License.
 //===----------------------------------------------------------------------===//
 
-import Foundation
+import Dispatch
 import Synchronization
+
+#if canImport(Musl)
+import Musl
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Darwin)
+import Darwin
+#endif
 
 /// Async friendly wrapper around `DispatchSourceSignal`. Provides an `AsyncStream`
 /// interface to get notified of received signals.
@@ -69,6 +77,16 @@ public final class AsyncSignalHandler: Sendable {
     }
 
     private let state: Mutex<State> = .init(State())
+
+    /// Create a new `AsyncSignalHandler` that catches all signals.
+    public static func catchAll() -> AsyncSignalHandler {
+        #if os(macOS)
+        let range = 1...31
+        #else
+        let range = 1...64
+        #endif
+        return create(notify: range.map { Int32($0) })
+    }
 
     /// Create a new `AsyncSignalHandler` for the list of given signals `notify`.
     /// The default signal handlers for these signals are removed and async handlers

@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright © 2025 Apple Inc. and the Containerization project authors.
+// Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,7 +14,19 @@
 // limitations under the License.
 //===----------------------------------------------------------------------===//
 
-import Foundation
+#if canImport(Musl)
+import Musl
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Darwin)
+import Darwin
+#endif
+
+#if canImport(FoundationEssentials)
+import struct FoundationEssentials.URL
+#else
+import struct Foundation.URL
+#endif
 
 /// Trivial type to discover information about a given file (uid, gid, mode...).
 public struct File: Sendable {
@@ -52,7 +64,7 @@ public struct File: Sendable {
 /// `FileInfo` holds and provides easy access to stat(2) data
 /// for a file.
 public struct FileInfo: Sendable {
-    private let _stat_t: Foundation.stat
+    private let _stat_t: stat
     private let _path: String
 
     init(_ path: String, stat: stat) {

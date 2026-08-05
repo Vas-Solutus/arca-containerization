@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright © 2025 Apple Inc. and the Containerization project authors.
+// Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,19 +17,21 @@
 /// Statistics for a container.
 public struct ContainerStatistics: Sendable {
     public var id: String
-    public var process: ProcessStatistics
-    public var memory: MemoryStatistics
-    public var cpu: CPUStatistics
-    public var blockIO: BlockIOStatistics
-    public var networks: [NetworkStatistics]
+    public var process: ProcessStatistics?
+    public var memory: MemoryStatistics?
+    public var cpu: CPUStatistics?
+    public var blockIO: BlockIOStatistics?
+    public var networks: [NetworkStatistics]?
+    public var memoryEvents: MemoryEventStatistics?
 
     public init(
         id: String,
-        process: ProcessStatistics,
-        memory: MemoryStatistics,
-        cpu: CPUStatistics,
-        blockIO: BlockIOStatistics,
-        networks: [NetworkStatistics]
+        process: ProcessStatistics? = nil,
+        memory: MemoryStatistics? = nil,
+        cpu: CPUStatistics? = nil,
+        blockIO: BlockIOStatistics? = nil,
+        networks: [NetworkStatistics]? = nil,
+        memoryEvents: MemoryEventStatistics? = nil
     ) {
         self.id = id
         self.process = process
@@ -37,6 +39,7 @@ public struct ContainerStatistics: Sendable {
         self.cpu = cpu
         self.blockIO = blockIO
         self.networks = networks
+        self.memoryEvents = memoryEvents
     }
 
     /// Process statistics for a container.
@@ -61,6 +64,13 @@ public struct ContainerStatistics: Sendable {
         public var slabBytes: UInt64
         public var pageFaults: UInt64
         public var majorPageFaults: UInt64
+        public var inactiveFile: UInt64
+        public var anon: UInt64
+        public var workingsetRefaultAnon: UInt64
+        public var workingsetRefaultFile: UInt64
+        public var pgstealKswapd: UInt64
+        public var pgstealDirect: UInt64
+        public var pgstealKhugepaged: UInt64
 
         public init(
             usageBytes: UInt64,
@@ -71,7 +81,14 @@ public struct ContainerStatistics: Sendable {
             kernelStackBytes: UInt64,
             slabBytes: UInt64,
             pageFaults: UInt64,
-            majorPageFaults: UInt64
+            majorPageFaults: UInt64,
+            inactiveFile: UInt64,
+            anon: UInt64,
+            workingsetRefaultAnon: UInt64 = 0,
+            workingsetRefaultFile: UInt64 = 0,
+            pgstealKswapd: UInt64 = 0,
+            pgstealDirect: UInt64 = 0,
+            pgstealKhugepaged: UInt64 = 0
         ) {
             self.usageBytes = usageBytes
             self.limitBytes = limitBytes
@@ -82,6 +99,13 @@ public struct ContainerStatistics: Sendable {
             self.slabBytes = slabBytes
             self.pageFaults = pageFaults
             self.majorPageFaults = majorPageFaults
+            self.inactiveFile = inactiveFile
+            self.anon = anon
+            self.workingsetRefaultAnon = workingsetRefaultAnon
+            self.workingsetRefaultFile = workingsetRefaultFile
+            self.pgstealKswapd = pgstealKswapd
+            self.pgstealDirect = pgstealDirect
+            self.pgstealKhugepaged = pgstealKhugepaged
         }
     }
 
@@ -174,4 +198,51 @@ public struct ContainerStatistics: Sendable {
             self.transmittedErrors = transmittedErrors
         }
     }
+
+    /// Memory event counters from cgroup2's memory.events file.
+    public struct MemoryEventStatistics: Sendable {
+        /// Number of times the cgroup was reclaimed due to low memory.
+        public var low: UInt64
+        /// Number of times the cgroup exceeded its high memory limit.
+        public var high: UInt64
+        /// Number of times the cgroup hit its max memory limit.
+        public var max: UInt64
+        /// Number of times the cgroup triggered OOM.
+        public var oom: UInt64
+        /// Number of processes killed by OOM killer.
+        public var oomKill: UInt64
+
+        public init(low: UInt64, high: UInt64, max: UInt64, oom: UInt64, oomKill: UInt64) {
+            self.low = low
+            self.high = high
+            self.max = max
+            self.oom = oom
+            self.oomKill = oomKill
+        }
+    }
+}
+
+/// Categories of statistics that can be requested.
+public struct StatCategory: OptionSet, Sendable {
+    public let rawValue: Int
+
+    public init(rawValue: Int) {
+        self.rawValue = rawValue
+    }
+
+    /// Process statistics (pids.current, pids.max).
+    public static let process = StatCategory(rawValue: 1 << 0)
+    /// Memory usage statistics.
+    public static let memory = StatCategory(rawValue: 1 << 1)
+    /// CPU usage statistics.
+    public static let cpu = StatCategory(rawValue: 1 << 2)
+    /// Block I/O statistics.
+    public static let blockIO = StatCategory(rawValue: 1 << 3)
+    /// Network interface statistics.
+    public static let network = StatCategory(rawValue: 1 << 4)
+    /// Memory event counters (OOM kills, pressure events, etc.).
+    public static let memoryEvents = StatCategory(rawValue: 1 << 5)
+
+    /// All available statistics categories.
+    public static let all: StatCategory = [.process, .memory, .cpu, .blockIO, .network, .memoryEvents]
 }

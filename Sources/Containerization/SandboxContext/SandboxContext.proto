@@ -24,6 +24,14 @@ service SandboxContext {
   rpc SetupEmulator(SetupEmulatorRequest) returns (SetupEmulatorResponse);
   // Write data to an existing or new file.
   rpc WriteFile(WriteFileRequest) returns (WriteFileResponse);
+  // Copy a file or directory between the host and guest.
+  // Data transfer happens over a dedicated vsock connection;
+  // the gRPC stream is used only for control/metadata.
+  rpc Copy(CopyRequest) returns (stream CopyResponse);
+  // Stat a path in the guest filesystem.
+  rpc Stat(StatRequest) returns (StatResponse);
+  // Perform a filesystem operation on a mounted filesystem.
+  rpc FilesystemOperation(FilesystemOperationRequest) returns (FilesystemOperationResponse);
 
   // Create a new process inside the container.
   rpc CreateProcess(CreateProcessRequest) returns (CreateProcessResponse);
@@ -181,7 +189,7 @@ message DeleteProcessRequest {
 
 message DeleteProcessResponse {}
 
-message StartProcessRequest { 
+message StartProcessRequest {
   string id = 1;
   optional string containerID = 2;
 }
@@ -225,6 +233,96 @@ message WriteFileRequest {
 
 message WriteFileResponse {}
 
+message CopyRequest {
+  enum Direction {
+    // Copy from host into guest.
+    COPY_IN = 0;
+    // Copy from guest to host.
+    COPY_OUT = 1;
+  }
+  // Direction of the copy operation.
+  Direction direction = 1;
+  // Path in the guest (destination for COPY_IN, source for COPY_OUT).
+  string path = 2;
+  // File mode for single-file COPY_IN (defaults to 0644 if not set).
+  uint32 mode = 3;
+  // Create parent directories if they don't exist.
+  bool create_parents = 4;
+  // Vsock port the host is listening on for data transfer.
+  uint32 vsock_port = 5;
+  // For COPY_IN: indicates the data arriving on vsock is a tar+gzip archive.
+  bool is_archive = 6;
+}
+
+message CopyResponse {
+  enum Status {
+    // Transfer metadata (first message for COPY_OUT: is_archive, total_size).
+    METADATA = 0;
+    // Data transfer completed successfully.
+    COMPLETE = 1;
+  }
+  // What this response represents.
+  Status status = 1;
+  // For COPY_OUT METADATA: indicates the data on vsock will be a tar+gzip archive.
+  bool is_archive = 2;
+  // For COPY_OUT METADATA: total size in bytes (0 if unknown, e.g. for archives).
+  uint64 total_size = 3;
+  // Non-empty if an error occurred.
+  string error = 4;
+}
+
+message StatRequest { string path = 1; }
+
+message Stat {
+  uint64 dev = 1;   // st_dev:     ID of device containing file
+  uint64 ino = 2;   // st_ino:     inode number
+  uint32 mode = 3;  // st_mode:    file type and mode (permissions)
+  uint64 nlink = 4; // st_nlink:   number of hard links
+  uint32 uid = 5;   // st_uid:     user ID of owner
+  uint32 gid = 6;   // st_gid:     group ID of owner
+  uint64 rdev = 7;  // st_rdev:    device ID (if special file)
+  int64 size = 8;   // st_size:    total size in bytes
+  int64 blksize = 9;  // st_blksize: preferred block size for filesystem I/O
+  int64 blocks = 10;  // st_blocks:  number of 512-byte blocks allocated
+  google.protobuf.Timestamp atime = 11; // st_atim: time of last access
+  google.protobuf.Timestamp mtime = 12; // st_mtim: time of last modification
+  google.protobuf.Timestamp ctime = 13; // st_ctim: time of last status change
+}
+
+message StatResponse {
+  Stat stat = 1;
+  string error = 2; // Non-empty if stat failed.
+}
+
+message FiTrimParams {
+  oneof schedule {
+    OneShot one_shot = 1;
+  }
+
+  message OneShot {}
+}
+message FiFreezeParams {}
+message FiThawParams {}
+
+message FiTrimResult {
+  uint64 trimmed_bytes = 1;
+}
+
+message FilesystemOperationRequest {
+  string path = 1;
+  oneof operation {
+    FiTrimParams trim = 2;
+    FiFreezeParams freeze = 3;
+    FiThawParams thaw = 4;
+  }
+}
+
+message FilesystemOperationResponse {
+  oneof result {
+    FiTrimResult trim = 1;
+  }
+}
+
 message IpLinkSetRequest {
   string interface = 1;
   bool up = 2;
@@ -235,22 +333,26 @@ message IpLinkSetResponse {}
 
 message IpAddrAddRequest {
   string interface = 1;
-  string address = 2;
+  string ipv4Address = 2;
+  optional string ipv6Address = 3;
 }
 
 message IpAddrAddResponse {}
 
 message IpRouteAddLinkRequest {
   string interface = 1;
-  string address = 2;
-  string srcAddr = 3;
+  string dstIpv4Addr = 2;
+  string srcIpv4Addr = 3;
+  optional string dstIpv6Addr = 4;
+  optional string srcIpv6Addr = 5;
 }
 
 message IpRouteAddLinkResponse {}
 
 message IpRouteAddDefaultRequest {
   string interface = 1;
-  string gateway = 2;
+  string ipv4Gateway = 2;
+  optional string ipv6Gateway = 3;
 }
 
 message IpRouteAddDefaultResponse {}
@@ -288,8 +390,20 @@ message KillRequest {
 
 message KillResponse { int32 result = 1; }
 
+// Categories of statistics that can be requested.
+enum StatCategory {
+  STAT_CATEGORY_UNSPECIFIED = 0;
+  STAT_CATEGORY_PROCESS = 1;
+  STAT_CATEGORY_MEMORY = 2;
+  STAT_CATEGORY_CPU = 3;
+  STAT_CATEGORY_BLOCK_IO = 4;
+  STAT_CATEGORY_NETWORK = 5;
+  STAT_CATEGORY_MEMORY_EVENTS = 6;
+}
+
 message ContainerStatisticsRequest {
   repeated string container_ids = 1;  // Empty = all containers
+  repeated StatCategory categories = 2;  // Empty = all categories
 }
 
 message ContainerStatisticsResponse {
@@ -303,6 +417,7 @@ message ContainerStats {
   CPUStats cpu = 4;
   BlockIOStats block_io = 5;
   repeated NetworkStats networks = 6;
+  MemoryEventStats memory_events = 7;
 }
 
 message ProcessStats {
@@ -320,6 +435,13 @@ message MemoryStats {
   uint64 slab_bytes = 7;
   uint64 page_faults = 8;
   uint64 major_page_faults = 9;
+  uint64 inactive_file = 10;
+  uint64 anon = 11;
+  uint64 workingset_refault_anon = 12;
+  uint64 workingset_refault_file = 13;
+  uint64 pgsteal_kswapd = 14;
+  uint64 pgsteal_direct = 15;
+  uint64 pgsteal_khugepaged = 16;
 }
 
 message CPUStats {
@@ -352,4 +474,20 @@ message NetworkStats {
   uint64 transmittedBytes = 5;
   uint64 receivedErrors = 6;
   uint64 transmittedErrors = 7;
+}
+
+// Memory event counters from cgroup2's memory.events file.
+message MemoryEventStats {
+  // Number of times the cgroup was reclaimed due to low memory.
+  uint64 low = 1;
+  // Number of times the cgroup exceeded its high memory limit.
+  uint64 high = 2;
+  // Number of times the cgroup hit its max memory limit.
+  uint64 max = 3;
+  // Number of times the cgroup triggered OOM.
+  uint64 oom = 4;
+  // Number of processes killed by OOM killer.
+  uint64 oom_kill = 5;
+  // Number of times charge for memory failed because of limit.
+  uint64 oom_group_kill = 6;
 }

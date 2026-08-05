@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright © 2025 Apple Inc. and the Containerization project authors.
+// Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -80,6 +80,10 @@ public struct VMConfiguration: Sendable {
     /// Enable nested virtualization support. If the VirtualMachineManager
     /// does not support this feature, it MUST return an .unsupported ContainerizationError.
     public var nestedVirtualization: Bool
+    /// Extension objects that participate in the VM instance lifecycle.
+    /// Extension packages append their types here; VZ-aware extensions
+    /// should conform to ``VZInstanceExtension``.
+    public var extensions: [any Sendable] = []
 
     public init(
         cpus: Int = 4,

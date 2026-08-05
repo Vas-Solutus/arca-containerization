@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright © 2025 Apple Inc. and the Containerization project authors.
+// Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,6 +13,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //===----------------------------------------------------------------------===//
+
+import ContainerizationError
+import ContainerizationExtras
 
 /// DNS configuration for a container. The values will be used to
 /// construct /etc/resolv.conf for a given container.
@@ -40,6 +43,26 @@ public struct DNS: Sendable {
         self.domain = domain
         self.searchDomains = searchDomains
         self.options = options
+    }
+
+    /// Validates the DNS configuration.
+    ///
+    /// Ensures that all nameserver entries are valid IPv4 or IPv6 addresses.
+    /// Arbitrary hostnames are not permitted as nameservers.
+    ///
+    /// - Throws: ``ContainerizationError`` with code `.invalidArgument` if
+    ///   any nameserver is not a valid IP address.
+    public func validate() throws {
+        for nameserver in nameservers {
+            let isValidIPv4 = (try? IPv4Address(nameserver)) != nil
+            let isValidIPv6 = (try? IPv6Address(nameserver)) != nil
+            if !isValidIPv4 && !isValidIPv6 {
+                throw ContainerizationError(
+                    .invalidArgument,
+                    message: "nameserver '\(nameserver)' is not a valid IPv4 or IPv6 address"
+                )
+            }
+        }
     }
 }
 

@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright © 2025 Apple Inc. and the Containerization project authors.
+// Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,8 +13,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //===----------------------------------------------------------------------===//
-
-import Foundation
 
 /// MediaTypes represent all supported OCI image content types for both metadata and layer formats.
 /// Follows all distributable media types in: https://github.com/opencontainers/image-spec/blob/main/specs-go/v1/mediatype.go

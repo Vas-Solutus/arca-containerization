@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright © 2025 Apple Inc. and the Containerization project authors.
+// Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -49,12 +49,20 @@ public enum NetlinkSocketError: Swift.Error, CustomStringConvertible, Equatable 
     }
 }
 
+#if os(Linux)
 #if canImport(Musl)
 import Musl
 let osSocket = Musl.socket
 let osBind = Musl.bind
 let osSend = Musl.send
 let osRecv = Musl.recv
+#elseif canImport(Glibc)
+import Glibc
+let osSocket = Glibc.socket
+let osBind = Glibc.bind
+let osSend = Glibc.send
+let osRecv = Glibc.recv
+#endif
 
 /// A default implementation of `NetlinkSocket`.
 public class DefaultNetlinkSocket: NetlinkSocket {

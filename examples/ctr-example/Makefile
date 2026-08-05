@@ -1,4 +1,4 @@
-# Copyright © 2025 Apple Inc. and the Containerization project authors.
+# Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,6 +15,9 @@
 # ctr-example Makefile
 
 SWIFT = /usr/bin/swift
+
+UNAME_M := $(shell uname -m)
+KERNEL_ARCH := $(if $(filter $(UNAME_M),aarch64 arm64),arm64,$(UNAME_M))
 
 .PHONY: all build clean run
 
@@ -41,4 +44,4 @@ fmt:
 	$(SWIFT) format --in-place --recursive Sources/
 fetch-default-kernel:
 	$(MAKE) -C ../.. fetch-default-kernel
-	cp -L ../../.local/vmlinux ./vmlinux
+	cp -L ../../.local/vmlinux-$(KERNEL_ARCH) ./vmlinux-$(KERNEL_ARCH)

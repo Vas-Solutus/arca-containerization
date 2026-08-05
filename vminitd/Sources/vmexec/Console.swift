@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright © 2025 Apple Inc. and the Containerization project authors.
+// Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,8 +14,16 @@
 // limitations under the License.
 //===----------------------------------------------------------------------===//
 
-import Foundation
+import FoundationEssentials
+import LCShim
+
+#if canImport(Musl)
 import Musl
+private let _close = Musl.close
+#elseif canImport(Glibc)
+import Glibc
+private let _close = Glibc.close
+#endif
 
 class Console {
     let master: Int32
@@ -45,7 +53,7 @@ class Console {
         guard slaveFD != -1 else {
             throw App.Errno(stage: "open_pts")
         }
-        defer { Musl.close(slaveFD) }
+        defer { _ = _close(slaveFD) }
 
         for fd: Int32 in 0...2 {
             guard dup3(slaveFD, fd, 0) != -1 else {
@@ -55,7 +63,7 @@ class Console {
     }
 
     func close() throws {
-        guard Musl.close(self.master) == 0 else {
+        guard _close(self.master) == 0 else {
             throw App.Errno(stage: "close")
         }
     }

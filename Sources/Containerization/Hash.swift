@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright © 2025 Apple Inc. and the Containerization project authors.
+// Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,16 +14,27 @@
 // limitations under the License.
 //===----------------------------------------------------------------------===//
 
-#if os(macOS)
-
-import Crypto
 import ContainerizationError
+import Crypto
+import Foundation
 
-public func hashMountSource(source: String) throws -> String {
-    guard let data = source.data(using: .utf8) else {
-        throw ContainerizationError(.invalidArgument, message: "\(source) could not be converted to Data")
+extension Mount {
+    /// A deterministic hash of the mount's source path, used as the virtiofs tag.
+    ///
+    /// Resolves symlinks before hashing so that different paths to the same
+    /// directory produce an identical tag.
+    public var tagHash: String {
+        get throws {
+            try hashFilePath(path: self.source)
+        }
+    }
+}
+
+func hashFilePath(path: String) throws -> String {
+    // Resolve symlinks so different paths to the same directory get the same hash.
+    let resolvedSource = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+    guard let data = resolvedSource.data(using: .utf8) else {
+        throw ContainerizationError(.invalidArgument, message: "\(path) could not be converted to Data")
     }
     return String(SHA256.hash(data: data).encoded.prefix(36))
 }
-
-#endif

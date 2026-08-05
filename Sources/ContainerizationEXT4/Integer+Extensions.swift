@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright © 2025 Apple Inc. and the Containerization project authors.
+// Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,8 +13,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //===----------------------------------------------------------------------===//
-
-import Foundation
 
 extension UInt64 {
     public var lo: UInt32 {
@@ -34,7 +32,7 @@ extension UInt64 {
     }
 
     public static func / (lhs: Self, rhs: UInt32) -> UInt32 {
-        (lhs / UInt64(rhs)).lo
+        UInt32(lhs / UInt64(rhs))
     }
 
     public static func * (lhs: Self, rhs: UInt32) -> UInt64 {

@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright © 2025 Apple Inc. and the Containerization project authors.
+// Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -34,7 +34,7 @@ public struct InitImage: Sendable {
 extension InitImage {
     /// Unpack the initial filesystem for the desired platform at a given path.
     public func initBlock(at: URL, for platform: SystemPlatform) async throws -> Mount {
-        let unpacker = EXT4Unpacker(blockSizeInBytes: 512.mib())
+        let unpacker = EXT4Unpacker(capacityInBytes: 512.mib())
         var fs = try await unpacker.unpack(self.image, for: platform.ociPlatform(), at: at)
         fs.options = ["ro"]
         return fs

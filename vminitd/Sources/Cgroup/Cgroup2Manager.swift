@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright © 2025 Apple Inc. and the Containerization project authors.
+// Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,11 +14,11 @@
 // limitations under the License.
 //===----------------------------------------------------------------------===//
 
+#if os(Linux)
+
 // NOTE: Ideally this should live in ContainerizationOS/Linux, or just ContainerizationCgroups
 // or something similar, but it's not there yet. It does what we need, but it'd need a lot more
 // features and testing before it's ready to be public.
-
-#if os(Linux)
 
 #if canImport(Musl)
 import Musl
@@ -26,6 +26,7 @@ import Musl
 import Glibc
 #endif
 
+import LCShim
 import ContainerizationOCI
 import ContainerizationOS
 import Foundation
@@ -42,8 +43,8 @@ package enum Cgroup2Controller: String {
 
 // Extremely simple cgroup manager. Our needs are simple for now, and this is
 // reflected in the type.
-package struct Cgroup2Manager: Sendable {
-    package static let defaultMountPoint = URL(filePath: "/sys/fs/cgroup")
+public struct Cgroup2Manager: Sendable {
+    public static let defaultMountPoint = URL(filePath: "/sys/fs/cgroup")
 
     private static let killFile = "cgroup.kill"
     private static let procsFile = "cgroup.procs"
@@ -65,7 +66,7 @@ package struct Cgroup2Manager: Sendable {
         self.logger = logger
     }
 
-    package static func load(
+    public static func load(
         mountPoint: URL = Self.defaultMountPoint,
         group: URL,
         logger: Logger? = nil
@@ -182,7 +183,7 @@ package struct Cgroup2Manager: Sendable {
         }
     }
 
-    package func addProcess(pid: Int32) throws {
+    public func addProcess(pid: Int32) throws {
         self.logger?.debug(
             "adding new proc to cgroup",
             metadata: [
@@ -198,7 +199,7 @@ package struct Cgroup2Manager: Sendable {
         )
     }
 
-    package func applyResources(resources: ContainerizationOCI.LinuxResources) throws {
+    public func applyResources(resources: ContainerizationOCI.LinuxResources) throws {
         self.logger?.debug(
             "applying cgroup resources",
             metadata: [
@@ -206,29 +207,31 @@ package struct Cgroup2Manager: Sendable {
             ])
 
         if let memory = resources.memory, let limit = memory.limit {
+            // The OCI spec defines -1 as unlimited; cgroup v2 expects "max".
+            let value = limit < 0 ? "max" : String(limit)
             try Self.writeValue(
                 path: self.path,
-                value: String(limit),
+                value: value,
                 fileName: "memory.max"
             )
         }
 
-        if let cpu = resources.cpu {
-            if let quota = cpu.quota, let period = cpu.period {
-                // cpu.max format is "quota period"
-                let value = "\(quota) \(period)"
-                try Self.writeValue(
-                    path: self.path,
-                    value: value,
-                    fileName: "cpu.max"
-                )
-            }
+        if let cpu = resources.cpu, let quota = cpu.quota, let period = cpu.period {
+            // cpu.max format is "quota period"
+            let value = "\(quota) \(period)"
+            try Self.writeValue(
+                path: self.path,
+                value: value,
+                fileName: "cpu.max"
+            )
         }
 
         if let pids = resources.pids {
+            // The OCI spec defines -1 as unlimited; cgroup v2 expects "max".
+            let value = pids.limit < 0 ? "max" : String(pids.limit)
             try Self.writeValue(
                 path: self.path,
-                value: String(pids.limit),
+                value: value,
                 fileName: "pids.max"
             )
         }
@@ -247,6 +250,21 @@ package struct Cgroup2Manager: Sendable {
             value: String(bytes),
             fileName: "memory.high"
         )
+    }
+
+    package func setMemoryLow(bytes: UInt64) throws {
+        self.logger?.debug(
+            "setting memory.low",
+            metadata: [
+                "path": "\(self.path.path)",
+                "bytes": "\(bytes)",
+            ]
+        )
+
+        try Self.writeValue(
+            path: self.path,
+            value: String(bytes),
+            fileName: "memory.low")
     }
 
     package func getMemoryEvents() throws -> MemoryEvents {
@@ -285,20 +303,52 @@ package struct Cgroup2Manager: Sendable {
         if force {
             try self.kill()
         }
-        try FileManager.default.removeItem(at: self.path)
+
+        // Recursively remove child cgroups first
+        try removeChildCgroups(at: self.path, force: force)
+
+        let result = rmdir(self.path.path)
+        if result != 0 {
+            throw Error.errno(errno: errno, message: "failed to remove cgroup directory \(self.path.path)")
+        }
     }
 
-    package func stats() throws -> Cgroup2Stats {
-        let pidsStats = try self.readPidsStats()
-        let memoryStats = try self.readMemoryStats()
-        let cpuStats = try self.readCPUStats()
-        let ioStats = try self.readIOStats()
+    private func removeChildCgroups(at path: URL, force: Bool) throws {
+        let fileManager = FileManager.default
 
-        return Cgroup2Stats(
-            pids: pidsStats,
-            memory: memoryStats,
-            cpu: cpuStats,
-            io: ioStats
+        guard let contents = try? fileManager.contentsOfDirectory(atPath: path.path) else {
+            return
+        }
+
+        // Remove child directories (potential nested cgroups) first
+        for item in contents {
+            let childPath = path.appending(path: item)
+            var isDirectory: ObjCBool = false
+
+            if fileManager.fileExists(atPath: childPath.path, isDirectory: &isDirectory) && isDirectory.boolValue {
+                if force {
+                    try Self.writeValue(
+                        path: childPath,
+                        value: "1",
+                        fileName: Self.killFile
+                    )
+                }
+
+                try removeChildCgroups(at: childPath, force: force)
+                let result = rmdir(childPath.path)
+                if result != 0 {
+                    throw Error.errno(errno: errno, message: "failed to remove child cgroup \(childPath.path)")
+                }
+            }
+        }
+    }
+
+    package func stats(_ categories: Cgroup2StatsCategory = .all) throws -> Cgroup2Stats {
+        Cgroup2Stats(
+            pids: categories.contains(.pids) ? try self.readPidsStats() : nil,
+            memory: categories.contains(.memory) ? try self.readMemoryStats() : nil,
+            cpu: categories.contains(.cpu) ? try self.readCPUStats() : nil,
+            io: categories.contains(.io) ? try self.readIOStats() : nil
         )
     }
 
@@ -375,9 +425,13 @@ package struct Cgroup2Manager: Sendable {
             fileWriteback: statValues["file_writeback"] ?? 0,
             pgfault: statValues["pgfault"] ?? 0,
             pgmajfault: statValues["pgmajfault"] ?? 0,
-            workingsetRefault: statValues["workingset_refault"] ?? 0,
+            workingsetRefaultAnon: statValues["workingset_refault_anon"] ?? 0,
+            workingsetRefaultFile: statValues["workingset_refault_file"] ?? 0,
             workingsetActivate: statValues["workingset_activate"] ?? 0,
             workingsetNodereclaim: statValues["workingset_nodereclaim"] ?? 0,
+            pgstealKswapd: statValues["pgsteal_kswapd"] ?? 0,
+            pgstealDirect: statValues["pgsteal_direct"] ?? 0,
+            pgstealKhugepaged: statValues["pgsteal_khugepaged"] ?? 0,
             inactiveAnon: statValues["inactive_anon"] ?? 0,
             activeAnon: statValues["active_anon"] ?? 0,
             inactiveFile: statValues["inactive_file"] ?? 0,
@@ -470,6 +524,22 @@ package struct Cgroup2Manager: Sendable {
     }
 }
 
+// Selects which cgroup stat groups to read.
+package struct Cgroup2StatsCategory: OptionSet, Sendable {
+    package let rawValue: UInt8
+
+    package init(rawValue: UInt8) {
+        self.rawValue = rawValue
+    }
+
+    package static let pids = Cgroup2StatsCategory(rawValue: 1 << 0)
+    package static let memory = Cgroup2StatsCategory(rawValue: 1 << 1)
+    package static let cpu = Cgroup2StatsCategory(rawValue: 1 << 2)
+    package static let io = Cgroup2StatsCategory(rawValue: 1 << 3)
+
+    package static let all: Cgroup2StatsCategory = [.pids, .memory, .cpu, .io]
+}
+
 package struct Cgroup2Stats: Sendable {
     package var pids: PidsStats?
     package var memory: MemoryStats?
@@ -518,9 +588,14 @@ package struct MemoryStats: Sendable {
     package var pgfault: UInt64
     package var pgmajfault: UInt64
 
-    package var workingsetRefault: UInt64
+    package var workingsetRefaultAnon: UInt64
+    package var workingsetRefaultFile: UInt64
     package var workingsetActivate: UInt64
     package var workingsetNodereclaim: UInt64
+
+    package var pgstealKswapd: UInt64
+    package var pgstealDirect: UInt64
+    package var pgstealKhugepaged: UInt64
 
     package var inactiveAnon: UInt64
     package var activeAnon: UInt64
@@ -543,9 +618,13 @@ package struct MemoryStats: Sendable {
         fileWriteback: UInt64 = 0,
         pgfault: UInt64 = 0,
         pgmajfault: UInt64 = 0,
-        workingsetRefault: UInt64 = 0,
+        workingsetRefaultAnon: UInt64 = 0,
+        workingsetRefaultFile: UInt64 = 0,
         workingsetActivate: UInt64 = 0,
         workingsetNodereclaim: UInt64 = 0,
+        pgstealKswapd: UInt64 = 0,
+        pgstealDirect: UInt64 = 0,
+        pgstealKhugepaged: UInt64 = 0,
         inactiveAnon: UInt64 = 0,
         activeAnon: UInt64 = 0,
         inactiveFile: UInt64 = 0,
@@ -566,9 +645,13 @@ package struct MemoryStats: Sendable {
         self.fileWriteback = fileWriteback
         self.pgfault = pgfault
         self.pgmajfault = pgmajfault
-        self.workingsetRefault = workingsetRefault
+        self.workingsetRefaultAnon = workingsetRefaultAnon
+        self.workingsetRefaultFile = workingsetRefaultFile
         self.workingsetActivate = workingsetActivate
         self.workingsetNodereclaim = workingsetNodereclaim
+        self.pgstealKswapd = pgstealKswapd
+        self.pgstealDirect = pgstealDirect
+        self.pgstealKhugepaged = pgstealKhugepaged
         self.inactiveAnon = inactiveAnon
         self.activeAnon = activeAnon
         self.inactiveFile = inactiveFile

@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright © 2025 Apple Inc. and the Containerization project authors.
+// Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,6 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //===----------------------------------------------------------------------===//
+
+import Foundation
 
 /// The core error type for Containerization.
 ///
@@ -77,6 +79,16 @@ extension ContainerizationError: CustomStringConvertible {
     }
 }
 
+extension ContainerizationError: LocalizedError {
+    /// A localized message describing what error occurred.
+    public var errorDescription: String? {
+        guard let cause = self.cause else {
+            return message
+        }
+        return "\(message) (cause: \"\(cause)\")"
+    }
+}
+
 extension ContainerizationError {
     /// Codes for a `ContainerizationError`.
     public struct Code: Sendable, Hashable {
@@ -106,7 +118,7 @@ extension ContainerizationError {
 
             let match = values[rawValue]
             guard let match else {
-                fatalError("invalid Code Value \(rawValue)")
+                fatalError("invalid code value \(rawValue)")
             }
             self.value = match
         }

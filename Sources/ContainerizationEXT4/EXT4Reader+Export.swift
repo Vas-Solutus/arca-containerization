@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright © 2025 Apple Inc. and the Containerization project authors.
+// Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,7 +14,6 @@
 // limitations under the License.
 //===----------------------------------------------------------------------===//
 
-#if os(macOS)
 import ContainerizationArchive
 import Foundation
 import SystemPackage
@@ -25,7 +24,7 @@ extension EXT4.EXT4Reader {
             format: .paxRestricted, filter: .none, options: [Options.xattrformat(.schily)])
         let writer = try ArchiveWriter(configuration: config)
         try writer.open(file: archive.url)
-        var items = self.tree.root.pointee.children
+        var items = Array(self.tree.root.pointee.children)
         let hardlinkedInodes = Set(self.hardlinks.values)
         var hardlinkTargets: [EXT4.InodeNumber: FilePath] = [:]
 
@@ -36,7 +35,7 @@ extension EXT4.EXT4Reader {
             let entry = WriteEntry()
             let mode = inode.mode
             let size: UInt64 = (UInt64(inode.sizeHigh) << 32) | UInt64(inode.sizeLow)
-            entry.permissions = mode
+            entry.permissions = mode_t(mode)
             guard let path = item.path else {
                 continue
             }
@@ -71,11 +70,11 @@ extension EXT4.EXT4Reader {
             let pathStr = path.description
             entry.path = pathStr
             entry.size = Int64(size)
-            entry.group = gid_t(inode.gid)
-            entry.owner = uid_t(inode.uid)
-            entry.creationDate = Date(fsTimestamp: UInt64((inode.ctimeExtra << 32) | inode.ctime))
-            entry.modificationDate = Date(fsTimestamp: UInt64((inode.mtimeExtra << 32) | inode.mtime))
-            entry.contentAccessDate = Date(fsTimestamp: UInt64((inode.atimeExtra << 32) | inode.atime))
+            entry.group = gid_t(inode.gidHigh) << 16 | gid_t(inode.gid)
+            entry.owner = uid_t(inode.uidHigh) << 16 | uid_t(inode.uid)
+            entry.creationDate = Date(fsTimestamp: UInt64(inode.crtimeExtra) << 32 | UInt64(inode.crtime))
+            entry.modificationDate = Date(fsTimestamp: UInt64(inode.mtimeExtra) << 32 | UInt64(inode.mtime))
+            entry.contentAccessDate = Date(fsTimestamp: UInt64(inode.atimeExtra) << 32 | UInt64(inode.atime))
             entry.xattrs = xattrs
 
             if mode.isDir() {
@@ -130,7 +129,7 @@ extension EXT4.EXT4Reader {
                 entry.fileType = .symbolicLink
                 if size < 60 {
                     let linkBytes = EXT4.tupleToArray(inode.block)
-                    entry.symlinkTarget = String(bytes: linkBytes, encoding: .utf8) ?? ""
+                    entry.symlinkTarget = String(bytes: linkBytes.prefix(Int(size)), encoding: .utf8) ?? ""
                 } else {
                     if let block = item.blocks {
                         try self.seek(block: block.start)
@@ -153,12 +152,12 @@ extension EXT4.EXT4Reader {
             let entry = WriteEntry()
             entry.path = path.description
             entry.hardlink = targetPath.description
-            entry.permissions = inode.mode
-            entry.group = gid_t(inode.gid)
-            entry.owner = uid_t(inode.uid)
-            entry.creationDate = Date(fsTimestamp: UInt64((inode.ctimeExtra << 32) | inode.ctime))
-            entry.modificationDate = Date(fsTimestamp: UInt64((inode.mtimeExtra << 32) | inode.mtime))
-            entry.contentAccessDate = Date(fsTimestamp: UInt64((inode.atimeExtra << 32) | inode.atime))
+            entry.permissions = mode_t(inode.mode)
+            entry.group = gid_t(inode.gidHigh) << 16 | gid_t(inode.gid)
+            entry.owner = uid_t(inode.uidHigh) << 16 | uid_t(inode.uid)
+            entry.creationDate = Date(fsTimestamp: UInt64(inode.crtimeExtra) << 32 | UInt64(inode.crtime))
+            entry.modificationDate = Date(fsTimestamp: UInt64(inode.mtimeExtra) << 32 | UInt64(inode.mtime))
+            entry.contentAccessDate = Date(fsTimestamp: UInt64(inode.atimeExtra) << 32 | UInt64(inode.atime))
             try writer.writeEntry(entry: entry, data: nil)
         }
         try writer.finishEncoding()
@@ -170,7 +169,7 @@ extension EXT4.EXT4Reader {
     }
 
     public static func readInlineExtendedAttributes(from buffer: [UInt8]) throws -> [EXT4.ExtendedAttribute] {
-        let header = UInt32(littleEndian: buffer[0...4].withUnsafeBytes { $0.load(as: UInt32.self) })
+        let header = buffer[0..<4].withUnsafeBytes { $0.loadLittleEndian(as: UInt32.self) }
         if header != EXT4.XAttrHeaderMagic {
             throw EXT4.FileXattrsState.Error.missingXAttrHeader
         }
@@ -183,7 +182,7 @@ extension EXT4.EXT4Reader {
     }
 
     public static func readBlockExtendedAttributes(from buffer: [UInt8]) throws -> [EXT4.ExtendedAttribute] {
-        let header = UInt32(littleEndian: buffer[0...4].withUnsafeBytes { $0.load(as: UInt32.self) })
+        let header = buffer[0..<4].withUnsafeBytes { $0.loadLittleEndian(as: UInt32.self) }
         if header != EXT4.XAttrHeaderMagic {
             throw EXT4.FileXattrsState.Error.missingXAttrHeader
         }
@@ -203,10 +202,14 @@ extension Date {
             return
         }
 
-        let seconds = Int64(fsTimestamp & 0x3_ffff_ffff)
+        // 32 bits - base: seconds since January 1, 1970, signed (negative for pre-1970 dates)
+        // 2 bits - epoch: overflow counter (0-3), how many times the 32-bit seconds field has wrapped
+        // 30 bits - nanoseconds (0-999,999,999)
+        let base = Int32(truncatingIfNeeded: fsTimestamp)
+        let epoch = Int64(fsTimestamp & 0x3_0000_0000)
+        let seconds = Int64(base) + epoch
         let nanoseconds = Double(fsTimestamp >> 34) / 1_000_000_000
 
         self = Date(timeIntervalSince1970: Double(seconds) + nanoseconds)
     }
 }
-#endif

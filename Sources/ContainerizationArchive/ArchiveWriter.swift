@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright © 2025 Apple Inc. and the Containerization project authors.
+// Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,11 +16,13 @@
 
 import CArchive
 import Foundation
+import SystemPackage
 
 /// A class responsible for writing archives in various formats.
 public final class ArchiveWriter {
-    var underlying: OpaquePointer!
-    var delegate: FileArchiveWriterDelegate?
+    private static let chunkSize = 4 * 1024 * 1024
+
+    var underlying: OpaquePointer?
 
     /// Initialize a new `ArchiveWriter` with the given configuration.
     /// This method attempts to initialize an empty archive in memory, failing which it throws a `unableToCreateArchive` error.
@@ -36,21 +38,16 @@ public final class ArchiveWriter {
         try setOptions(configuration.options)
     }
 
-    /// Initialize a new `ArchiveWriter` with the given configuration and specified delegate.
-    private convenience init(configuration: ArchiveWriterConfiguration, delegate: FileArchiveWriterDelegate) throws {
-        try self.init(configuration: configuration)
-        self.delegate = delegate
-        try self.open()
-    }
-
-    private convenience init(configuration: ArchiveWriterConfiguration, file: URL) throws {
-        try self.init(configuration: configuration, delegate: FileArchiveWriterDelegate(url: file))
-    }
-
     /// Initialize a new `ArchiveWriter` for writing into the specified file with the given configuration options.
-    public convenience init(format: Format, filter: Filter, options: [Options] = [], file: URL) throws {
-        try self.init(
-            configuration: .init(format: format, filter: filter), delegate: FileArchiveWriterDelegate(url: file))
+    public convenience init(format: Format, filter: Filter, options: [Options] = [], locales: [String] = ArchiveWriterConfiguration.defaultLocales, file: URL) throws {
+        let config = ArchiveWriterConfiguration(
+            format: format,
+            filter: filter,
+            options: options,
+            locales: locales
+        )
+        try self.init(configuration: config)
+        try self.open(file: file)
     }
 
     /// Opens the given file for writing data into
@@ -69,15 +66,11 @@ public final class ArchiveWriter {
 
     /// Performs any necessary finalizations on the archive and releases resources.
     public func finishEncoding() throws {
-        if let u = underlying {
-            let r = archive_free(u)
-            do {
-                try wrap(r, ArchiveError.unableToCloseArchive, underlying: underlying)
-                underlying = nil
-            } catch {
-                underlying = nil
-                throw error
-            }
+        guard let u = underlying else { return }
+        underlying = nil
+        let r = archive_free(u)
+        guard r == ARCHIVE_OK else {
+            throw ArchiveError.unableToCloseArchive(r)
         }
     }
 
@@ -95,94 +88,6 @@ public final class ArchiveWriter {
             }
         }
         throw ArchiveError.failedToSetLocale(locales: locales)
-    }
-}
-
-extension ArchiveWriter {
-    fileprivate func open() throws {
-        guard let underlying = underlying else { throw ArchiveError.noUnderlyingArchive }
-        // TODO: to be or not to be retained, that is the question
-        let pointerToSelf = Unmanaged.passUnretained(self).toOpaque()
-
-        let res = archive_write_open2(
-            underlying,
-            pointerToSelf,
-            /// The open callback is invoked by archive_write_open().  It should return ARCHIVE_OK if the underlying file or data source is successfully opened.  If the open fails, it should call archive_set_error() to register an error code and message and return ARCHIVE_FATAL.  Please note that
-            /// if open fails, close is not called and resources must be freed inside the open callback or with the free callback.
-            { underlying, pointerToSelf in
-                do {
-                    guard let pointerToSelf = pointerToSelf else {
-                        throw ArchiveError.noArchiveInCallback
-                    }
-                    let archive: ArchiveWriter = Unmanaged.fromOpaque(pointerToSelf).takeUnretainedValue()
-                    guard let delegate = archive.delegate else {
-                        throw ArchiveError.noDelegateConfigured
-                    }
-                    try delegate.open(archive: archive)
-                    return ARCHIVE_OK
-                } catch {
-                    archive_set_error_wrapper(underlying, ARCHIVE_FATAL, "\(error)")
-                    return ARCHIVE_FATAL
-                }
-            },
-            /// The write callback is invoked whenever the library needs to write raw bytes to the archive.  For correct blocking, each call to the write callback function should translate into a single write(2) system call.  This is especially critical when writing archives to tape drives.  On
-            /// success, the write callback should return the number of bytes actually written.  On error, the callback should invoke archive_set_error() to register an error code and message and return -1.
-            { underlying, pointerToSelf, dataPointer, count in
-                do {
-                    guard let pointerToSelf = pointerToSelf else {
-                        throw ArchiveError.noArchiveInCallback
-                    }
-                    let archive: ArchiveWriter = Unmanaged.fromOpaque(pointerToSelf).takeUnretainedValue()
-                    guard let delegate = archive.delegate else {
-                        throw ArchiveError.noDelegateConfigured
-                    }
-                    return try delegate.write(
-                        archive: archive, buffer: UnsafeRawBufferPointer(start: dataPointer, count: count))
-                } catch {
-                    archive_set_error_wrapper(underlying, ARCHIVE_FATAL, "\(error)")
-                    return -1
-                }
-            },
-            /// The close callback is invoked by archive_close when the archive processing is complete. If the open callback fails, the close callback is not invoked.  The callback should return ARCHIVE_OK on success.  On failure, the callback should invoke archive_set_error() to register an
-            /// error code and message and return
-            { underlying, pointerToSelf in
-                do {
-                    guard let pointerToSelf = pointerToSelf else {
-                        throw ArchiveError.noArchiveInCallback
-                    }
-                    let archive: ArchiveWriter = Unmanaged.fromOpaque(pointerToSelf).takeUnretainedValue()
-                    guard let delegate = archive.delegate else {
-                        throw ArchiveError.noDelegateConfigured
-                    }
-                    try delegate.close(archive: archive)
-                    return ARCHIVE_OK
-                } catch {
-                    archive_set_error_wrapper(underlying, ARCHIVE_FATAL, "\(error)")
-                    return ARCHIVE_FATAL
-                }
-            },
-            /// The free callback is always invoked on archive_free.  The return code of this callback is not processed.
-            { underlying, pointerToSelf in
-                do {
-                    guard let pointerToSelf = pointerToSelf else {
-                        throw ArchiveError.noArchiveInCallback
-                    }
-                    let archive: ArchiveWriter = Unmanaged.fromOpaque(pointerToSelf).takeUnretainedValue()
-                    guard let delegate = archive.delegate else {
-                        throw ArchiveError.noDelegateConfigured
-                    }
-                    delegate.free(archive: archive)
-
-                    // TODO: should we balance the Unmanaged refcount here? Need to test for leaks.
-                    return ARCHIVE_OK
-                } catch {
-                    archive_set_error_wrapper(underlying, ARCHIVE_FATAL, "\(error)")
-                    return ARCHIVE_FATAL
-                }
-            }
-        )
-
-        try wrap(res, ArchiveError.unableToOpenArchive, underlying: underlying)
     }
 }
 
@@ -259,102 +164,175 @@ extension ArchiveWriter {
     fileprivate func writeData(data: UnsafeRawBufferPointer) throws {
         guard let underlying = self.underlying else { throw ArchiveError.noUnderlyingArchive }
 
-        let result = archive_write_data(underlying, data.baseAddress, data.count)
-        guard result >= 0 else {
-            throw ArchiveError.unableToWriteData(result)
+        var offset = 0
+        while offset < data.count {
+            guard let baseAddress = data.baseAddress?.advanced(by: offset) else {
+                throw ArchiveError.invalidBaseAddressArchiveWrite
+            }
+            let result = archive_write_data(underlying, baseAddress, data.count - offset)
+            guard result > 0 else {
+                throw ArchiveError.unableToWriteData(result)
+            }
+            offset += Int(result)
         }
     }
 }
 
 extension ArchiveWriter {
+    private func archive(_ relativePath: FilePath, dirPath: FilePath) throws {
+        let fm = FileManager.default
+
+        let fullPath = dirPath.appending(relativePath.string)
+
+        var statInfo = stat()
+        guard lstat(fullPath.string, &statInfo) == 0 else {
+            let errNo = errno
+            let err = POSIXErrorCode(rawValue: errNo) ?? .EINVAL
+            throw ArchiveError.failedToCreateArchive("lstat failed for '\(fullPath)': \(POSIXError(err))")
+        }
+
+        let mode = statInfo.st_mode
+        let uid = statInfo.st_uid
+        let gid = statInfo.st_gid
+        var size: Int64 = 0
+        let type: URLFileResourceType
+
+        if (mode & S_IFMT) == S_IFREG {
+            type = .regular
+            size = Int64(statInfo.st_size)
+        } else if (mode & S_IFMT) == S_IFDIR {
+            type = .directory
+        } else if (mode & S_IFMT) == S_IFLNK {
+            type = .symbolicLink
+        } else {
+            return
+        }
+
+        #if os(macOS)
+        let created = Date(timeIntervalSince1970: Double(statInfo.st_ctimespec.tv_sec))
+        let access = Date(timeIntervalSince1970: Double(statInfo.st_atimespec.tv_sec))
+        let modified = Date(timeIntervalSince1970: Double(statInfo.st_mtimespec.tv_sec))
+        #else
+        let created = Date(timeIntervalSince1970: Double(statInfo.st_ctim.tv_sec))
+        let access = Date(timeIntervalSince1970: Double(statInfo.st_atim.tv_sec))
+        let modified = Date(timeIntervalSince1970: Double(statInfo.st_mtim.tv_sec))
+        #endif
+
+        let entry = WriteEntry()
+        if type == .symbolicLink {
+            let targetPath = try fm.destinationOfSymbolicLink(atPath: fullPath.string)
+            // Resolve the target relative to the symlink's parent, not the archive root.
+            let symlinkParent = fullPath.removingLastComponent()
+            let resolvedFull = symlinkParent.appending(targetPath).lexicallyNormalized()
+            guard resolvedFull.starts(with: dirPath) else {
+                return
+            }
+            entry.symlinkTarget = targetPath
+        }
+
+        entry.path = relativePath.string
+        entry.size = size
+        entry.creationDate = created
+        entry.modificationDate = modified
+        entry.contentAccessDate = access
+        entry.fileType = type
+        entry.group = gid
+        entry.owner = uid
+        entry.permissions = mode
+        if type == .regular {
+            let buf = UnsafeMutableRawBufferPointer.allocate(byteCount: Self.chunkSize, alignment: 1)
+            guard let baseAddress = buf.baseAddress else {
+                throw ArchiveError.failedToCreateArchive("cannot create temporary buffer of size \(Self.chunkSize)")
+            }
+            defer { buf.deallocate() }
+            let fd = Foundation.open(fullPath.string, O_RDONLY)
+            guard fd >= 0 else {
+                let err = POSIXErrorCode(rawValue: errno) ?? .EINVAL
+                throw ArchiveError.failedToCreateArchive("cannot open file \(fullPath.string) for reading: \(err)")
+            }
+            defer { close(fd) }
+            try self.writeHeader(entry: entry)
+            while true {
+                let n = read(fd, baseAddress, Self.chunkSize)
+                if n == 0 { break }
+                if n < 0 {
+                    let err = POSIXErrorCode(rawValue: errno) ?? .EIO
+                    throw ArchiveError.failedToCreateArchive("failed to read from file \(fullPath.string): \(err)")
+                }
+                try self.writeData(data: UnsafeRawBufferPointer(start: baseAddress, count: n))
+            }
+            try self.finishEntry()
+        } else {
+            try self.writeEntry(entry: entry, data: nil)
+        }
+    }
+
     /// Recursively archives the content of a directory. Regular files, symlinks and directories are added into the archive.
     /// Note: Symlinks are added to the archive if both the source and target for the symlink are both contained in the top level directory.
     public func archiveDirectory(_ dir: URL) throws {
         let fm = FileManager.default
-        var resourceKeys = Set<URLResourceKey>([
-            .fileSizeKey, .fileResourceTypeKey,
-            .creationDateKey, .contentAccessDateKey, .contentModificationDateKey,
-        ])
-        #if os(macOS)
-        resourceKeys.insert(.fileSecurityKey)
-        #endif
+        let dirPath = FilePath(dir.path)
 
-        guard let directoryEnumerator = fm.enumerator(at: dir, includingPropertiesForKeys: Array(resourceKeys), options: .producesRelativePathURLs) else {
+        guard let enumerator = fm.enumerator(atPath: dirPath.string) else {
             throw POSIXError(.ENOTDIR)
         }
-        for case let fileURL as URL in directoryEnumerator {
-            var mode = mode_t()
-            var uid = uid_t()
-            var gid = gid_t()
-            let resourceValues = try fileURL.resourceValues(forKeys: resourceKeys)
-            guard let type = resourceValues.fileResourceType else {
-                throw ArchiveError.failedToGetProperty(fileURL.path(), .fileResourceTypeKey)
+
+        // Emit a leading "./" entry for the root directory, matching GNU/BSD tar behavior.
+        var rootStat = stat()
+        guard lstat(dirPath.string, &rootStat) == 0 else {
+            let err = POSIXErrorCode(rawValue: errno) ?? .EINVAL
+            throw ArchiveError.failedToCreateArchive("lstat failed for '\(dirPath)': \(POSIXError(err))")
+        }
+        let rootEntry = WriteEntry()
+        rootEntry.path = "./"
+        rootEntry.size = 0
+        rootEntry.fileType = .directory
+        rootEntry.owner = rootStat.st_uid
+        rootEntry.group = rootStat.st_gid
+        rootEntry.permissions = rootStat.st_mode
+        #if os(macOS)
+        rootEntry.creationDate = Date(timeIntervalSince1970: Double(rootStat.st_ctimespec.tv_sec))
+        rootEntry.contentAccessDate = Date(timeIntervalSince1970: Double(rootStat.st_atimespec.tv_sec))
+        rootEntry.modificationDate = Date(timeIntervalSince1970: Double(rootStat.st_mtimespec.tv_sec))
+        #else
+        rootEntry.creationDate = Date(timeIntervalSince1970: Double(rootStat.st_ctim.tv_sec))
+        rootEntry.contentAccessDate = Date(timeIntervalSince1970: Double(rootStat.st_atim.tv_sec))
+        rootEntry.modificationDate = Date(timeIntervalSince1970: Double(rootStat.st_mtim.tv_sec))
+        #endif
+        try self.writeHeader(entry: rootEntry)
+
+        for case let relativePath as String in enumerator {
+            try archive(FilePath(relativePath), dirPath: dirPath)
+        }
+    }
+
+    public func archive(_ paths: [FilePath], base: FilePath) throws {
+        let fm = FileManager.default
+        let base = base.lexicallyNormalized()
+
+        for path in paths {
+            guard path.starts(with: base) else {
+                throw ArchiveError.failedToCreateArchive("'\(path.string)' is not under '\(base.string)'")
             }
-            let allowedTypes: [URLFileResourceType] = [.directory, .regular, .symbolicLink]
-            guard allowedTypes.contains(type) else {
-                continue
-            }
-            var size: Int64 = 0
-            let entry = WriteEntry()
-            if type == .regular {
-                guard let _size = resourceValues.fileSize else {
-                    throw ArchiveError.failedToGetProperty(fileURL.path(), .fileSizeKey)
+
+            let relativePath = path.components.dropFirst(base.components.count)
+                .reduce(into: FilePath("")) { $0.append($1) }
+
+            var isDir: ObjCBool = false
+            _ = fm.fileExists(atPath: path.string, isDirectory: &isDir)
+            if isDir.boolValue {
+                guard let enumerator = fm.enumerator(atPath: path.string) else {
+                    throw POSIXError(.ENOTDIR)
                 }
-                size = Int64(_size)
-            } else if type == .symbolicLink {
-                let target = fileURL.resolvingSymlinksInPath().absoluteString
-                let root = dir.absoluteString
-                guard target.hasPrefix(root) else {
-                    continue
+
+                try archive(relativePath, dirPath: base)
+                for case let child as String in enumerator {
+                    let childPath = relativePath.appending(child)
+
+                    try archive(childPath, dirPath: base)
                 }
-                let linkTarget = target.dropFirst(root.count + 1)
-                entry.symlinkTarget = String(linkTarget)
-            }
-
-            guard let created = resourceValues.creationDate else {
-                throw ArchiveError.failedToGetProperty(fileURL.path(), .creationDateKey)
-            }
-            guard let access = resourceValues.contentAccessDate else {
-                throw ArchiveError.failedToGetProperty(fileURL.path(), .contentAccessDateKey)
-            }
-            guard let modified = resourceValues.contentModificationDate else {
-                throw ArchiveError.failedToGetProperty(fileURL.path(), .contentModificationDateKey)
-            }
-
-            #if os(macOS)
-            guard let perms = resourceValues.fileSecurity else {
-                throw ArchiveError.failedToGetProperty(fileURL.path(), .fileSecurityKey)
-            }
-            CFFileSecurityGetMode(perms, &mode)
-            CFFileSecurityGetOwner(perms, &uid)
-            CFFileSecurityGetGroup(perms, &gid)
-            #else
-            let path = fileURL.path()
-            var statInfo = stat()
-            guard lstat(path, &statInfo) == 0 else {
-                let err = POSIXErrorCode(rawValue: errno)!
-                throw POSIXError(err)
-            }
-            mode = statInfo.st_mode
-            uid = statInfo.st_uid
-            gid = statInfo.st_gid
-            #endif
-
-            entry.path = fileURL.relativePath
-            entry.size = size
-            entry.creationDate = created
-            entry.modificationDate = modified
-            entry.contentAccessDate = access
-            entry.fileType = type
-            entry.group = gid
-            entry.owner = uid
-            entry.permissions = mode
-            if type == .regular {
-                let p = dir.appending(path: fileURL.relativePath)
-                let data = try Data(contentsOf: p, options: .uncached)
-                try self.writeEntry(entry: entry, data: data)
             } else {
-                try self.writeHeader(entry: entry)
+                try archive(relativePath, dirPath: base)
             }
         }
     }

@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Copyright © 2025 Apple Inc. and the Containerization project authors.
+// Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -330,12 +330,7 @@ extension Socket {
 
         var cmsgBuf = [UInt8](repeating: 0, count: Int(CZ_CMSG_SPACE(Int(MemoryLayout<Int32>.size))))
         msg.msg_control = withUnsafeMutablePointer(to: &cmsgBuf[0]) { UnsafeMutableRawPointer($0) }
-
-        #if canImport(Glibc)
-        msg.msg_controllen = size_t(cmsgBuf.count)
-        #else
-        msg.msg_controllen = socklen_t(cmsgBuf.count)
-        #endif
+        msg.msg_controllen = numericCast(cmsgBuf.count)
 
         let recvResult = withUnsafeMutablePointer(to: &msg) { msgPtr in
             sysRecvmsg(handle.fileDescriptor, msgPtr, 0)
@@ -392,7 +387,7 @@ extension Socket {
                 sysRead(handle.fileDescriptor, baseAddress, bufferSize)
             }
             if bytesRead < 0 {
-                throw Socket.errnoToError(msg: "Error reading from connection")
+                throw Socket.errnoToError(msg: "error reading from connection")
             } else if bytesRead == 0 {
                 throw SocketError.closed
             }

@@ -783,7 +783,7 @@ extension LinuxContainer {
                 // We don't need the rootfs (or writable layer), nor do OCI runtimes want it included.
                 // Also filter out file mount holding directories. We'll mount those separately under /run.
                 // Transform virtiofs mounts to bind mounts from /run/virtiofs/{tag}
-                // ARCA: block device mounts (/dev/vdb, /dev/vdc, ...) are also filtered out.
+                // ARCA: the OverlayFS block device mounts are also filtered out.
                 let containerMounts = createdState.vm.mounts[self.id] ?? []
                 let holdingTags = createdState.fileMountContext.holdingDirectoryTags
                 // Drop rootfs, and writable layer if present.
@@ -791,10 +791,20 @@ extension LinuxContainer {
                 var mounts: [ContainerizationOCI.Mount] =
                     containerMounts.dropFirst(mountsToSkip)
                     .filter { !holdingTags.contains($0.source) }
-                    // ARCA PATCH: skip OverlayFS layer block devices. They are mounted by vminitd
-                    // at boot (ArcaBoot.prepareOverlayFS), not by vmexec, and OCI runtimes must not
-                    // see them.
-                    .filter { !($0.source.hasPrefix("/dev/vd") && $0.source != "/dev") }
+                    // ARCA PATCH: skip the OverlayFS block devices -- and only those. They are
+                    // attached with an empty destination precisely so that nothing here mounts
+                    // them; vminitd mounts them at boot (ArcaBoot.prepareOverlayFS) and OCI
+                    // runtimes must not see them.
+                    //
+                    // The empty destination is the marker because it is the host's own
+                    // statement of intent (OverlayFSMounter.buildMounts, "Empty to prevent
+                    // auto-mount by framework"), and it is the one thing that distinguishes
+                    // them here: by this point every block mount's source has been rewritten
+                    // to a /dev/vdX the allocator chose, so the source says nothing about what
+                    // the device is. This filter used to drop every /dev/vd source, which took
+                    // named-volume block devices with it and was why no named volume was ever
+                    // mounted at its destination.
+                    .filter { !($0.source.hasPrefix("/dev/vd") && $0.destination.isEmpty) }
                     .map { attached -> ContainerizationOCI.Mount in
                         if attached.type == "virtiofs" {
                             // Transform to bind mount from holding directory

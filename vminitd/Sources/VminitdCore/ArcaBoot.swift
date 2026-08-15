@@ -15,9 +15,12 @@
 
 #if os(Linux)
 
+import Containerization
+import ContainerizationEXT4
 import ContainerizationOS
 import Foundation
 import Logging
+import SystemPackage
 
 #if canImport(Musl)
 import Musl
@@ -87,40 +90,96 @@ enum ArcaBoot {
         }
     }
 
-    /// Auto-detects OverlayFS layer block devices and prepares the mount options.
+    /// Every `/dev/vdX` node present, paired with the Arca role its ext4 volume label names.
     ///
-    /// Not hardcoded: this only runs if /dev/vdb exists, which indicates OverlayFS layers.
+    /// Devices carrying no role -- Apple's initfs, and every named-volume image, which vmexec
+    /// mounts from the OCI spec at a destination the host chose -- are absent from the result.
+    /// So is anything that is not an ext4 filesystem: a device with no ext4 superblock
+    /// definitionally carries no ext4 volume label, and classifying it as "not ours" is
+    /// reading the disk, not guessing about it. Any *other* failure to read a device is fatal,
+    /// because a layer we cannot identify is a rootfs we would silently build wrong.
+    private static func labelledBlockDevices(log: Logger) -> [(device: String, role: ArcaBlockDeviceRole)] {
+        let entries: [String]
+        do {
+            entries = try FileManager.default.contentsOfDirectory(atPath: "/dev")
+        } catch {
+            log.error("failed to enumerate /dev: \(error)")
+            exit(1)
+        }
+
+        // `vd` + exactly one letter of "a"..."z" is the whole of the virtio-blk namespace this
+        // VM can produce: the host allocates tags from that alphabet and stops
+        // (Character.blockDeviceTagAllocator). Excluding longer names also excludes partition
+        // nodes such as vda1. Sorted, so single letters come back in the order the host
+        // attached them.
+        let devices =
+            entries
+            .filter { name in
+                guard name.count == 3, name.hasPrefix("vd"), let letter = name.last else {
+                    return false
+                }
+                return ("a"..."z").contains(letter)
+            }
+            .sorted()
+            .map { "/dev/\($0)" }
+
+        var classified: [(device: String, role: ArcaBlockDeviceRole)] = []
+        for device in devices {
+            let label: String?
+            do {
+                label = try EXT4.volumeLabel(ofBlockDevice: FilePath(device))
+            } catch EXT4.Error.invalidSuperBlock {
+                log.debug("\(device) holds no ext4 filesystem, not an Arca device")
+                continue
+            } catch {
+                log.error("failed to read the ext4 superblock of \(device): \(error)")
+                exit(1)
+            }
+            guard let label, let role = ArcaBlockDeviceRole(volumeLabel: label) else {
+                log.info("\(device) label=\(label ?? "<none>") is not an Arca role, leaving it alone")
+                continue
+            }
+            log.info("\(device) is \(role.rawValue)")
+            classified.append((device, role))
+        }
+        return classified
+    }
+
+    /// Mounts the OverlayFS writable device and layer devices, and prepares the mount options.
+    ///
+    /// Devices are identified by the `ArcaBlockDeviceRole` in their ext4 volume label, never by
+    /// position or count. The previous version scanned /dev/vdc upwards until a device was
+    /// missing and called everything it found a layer, which silently swallowed the named
+    /// volumes attached after the layers and mounted them read-only as lowerdirs.
     static func prepareOverlayFS(log: Logger) async {
-        guard FileManager.default.fileExists(atPath: "/dev/vdb") else {
+        let classified = labelledBlockDevices(log: log)
+        let writables = classified.filter { $0.role == .overlayWritable }.map(\.device)
+        // Sorted by `labelledBlockDevices`, so this is the host's attach order, which is
+        // bottom-to-top -- see OverlayFSMounter.buildMounts.
+        let layers = classified.filter { $0.role == .overlayLayer }.map(\.device)
+
+        guard !writables.isEmpty || !layers.isEmpty else {
             log.info("no OverlayFS block devices detected, using default rootfs")
             return
         }
 
-        log.info("detected writable block device at /dev/vdb, checking for OverlayFS layers...")
-
-        // Detect all layer block devices (vdc, vdd, vde, ...)
-        var layers: [String] = []
-        let deviceLetters = "cdefghijklmnopqrstuvwxyz"
-        for letter in deviceLetters {
-            let device = "/dev/vd\(letter)"
-            if FileManager.default.fileExists(atPath: device) {
-                layers.append(device)
-            } else {
-                break  // Stop at first missing device
-            }
+        guard writables.count == 1 else {
+            log.error("expected exactly one \(ArcaBlockDeviceRole.overlayWritable.rawValue) device, found \(writables)")
+            exit(1)
         }
+        let writable = writables[0]
 
         guard !layers.isEmpty else {
-            log.info("no layer block devices detected (vdc exists but no vdd+), skipping OverlayFS")
+            log.info("\(writable) is present but no layer devices are, skipping OverlayFS")
             return
         }
 
-        log.info("detected \(layers.count) OverlayFS layer block devices")
+        log.info("detected \(layers.count) OverlayFS layer block devices: \(layers.joined(separator: ", "))")
 
         // Create mount point and mount writable filesystem
         try? FileManager.default.createDirectory(atPath: "/mnt/writable", withIntermediateDirectories: true)
-        guard Musl.mount("/dev/vdb", "/mnt/writable", "ext4", 0, "") == 0 else {
-            log.error("failed to mount writable filesystem /dev/vdb to /mnt/writable (errno: \(errno))")
+        guard Musl.mount(writable, "/mnt/writable", "ext4", 0, "") == 0 else {
+            log.error("failed to mount writable filesystem \(writable) to /mnt/writable (errno: \(errno))")
             exit(1)
         }
 

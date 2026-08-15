@@ -311,6 +311,9 @@ let package = Package(
                 .product(name: "Logging", package: "swift-log"),
                 "Containerization",
                 "ContainerizationArchive",
+                // ARCA PATCH: ArcaBoot reads the ext4 volume label off each virtio-blk device
+                // to decide what that device is.
+                "ContainerizationEXT4",
                 "ContainerizationNetlink",
                 "ContainerizationIO",
                 "ContainerizationOS",

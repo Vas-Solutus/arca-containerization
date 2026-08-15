@@ -220,9 +220,16 @@ public struct OverlayFSUnpacker: Sendable {
 
         // Unpack to isolated EXT4 filesystem
         // 2GB should be enough for most layers; will auto-expand if needed
+        //
+        // ARCA PATCH: the volume label is what tells the guest this image is a layer. Without
+        // it vminitd cannot distinguish a layer from any other virtio-blk device and falls
+        // back on counting, which is the defect this replaces. Cached images written before
+        // the label existed carry none and are ignored by the guest -- clear
+        // ~/.arca/layers when adopting this change.
         let filesystem = try EXT4.Formatter(
             FilePath(layerPath.path),
-            minDiskSize: 2 * 1024 * 1024 * 1024  // 2 GB
+            minDiskSize: 2 * 1024 * 1024 * 1024,  // 2 GB
+            volumeLabel: ArcaBlockDeviceRole.overlayLayer.volumeLabel
         )
         defer { try? filesystem.close() }
 

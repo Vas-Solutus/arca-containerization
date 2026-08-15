@@ -804,7 +804,17 @@ extension LinuxContainer {
                     // the device is. This filter used to drop every /dev/vd source, which took
                     // named-volume block devices with it and was why no named volume was ever
                     // mounted at its destination.
-                    .filter { !($0.source.hasPrefix("/dev/vd") && $0.destination.isEmpty) }
+                    //
+                    // **The source is not consulted, and the line used to say so while still
+                    // testing it.** It read
+                    // `!($0.source.hasPrefix("/dev/vd") && $0.destination.isEmpty)`, whose two
+                    // terms select the same set today only because both producers of an empty
+                    // destination happen to be block mounts. Deleting the first term changed
+                    // nothing, which makes it a guard no test can measure, and it was a latent
+                    // divergence besides: the day anything else marks a mount
+                    // don't-auto-mount, it would reach the OCI spec carrying an empty
+                    // destination -- which is not a mount any runtime can honour anyway.
+                    .filter { !$0.destination.isEmpty }
                     .map { attached -> ContainerizationOCI.Mount in
                         if attached.type == "virtiofs" {
                             // Transform to bind mount from holding directory

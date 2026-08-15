@@ -169,9 +169,33 @@ enum ArcaBoot {
         }
         let writable = writables[0]
 
+        // A writable overlay with nothing to stack under it is not a shape the
+        // host ever builds deliberately: it attaches the writable image and the
+        // image's layers together. So a writable with no layers means the
+        // layers WERE attached and this guest could not identify them.
+        // Returning here would boot the container on the bare initfs instead of
+        // on its own image -- `Start` succeeds, the container runs, and nothing
+        // it was built from is present.
+        //
+        // The known way to reach it is a layer cache written before the role
+        // label existed. The host now validates cache entries and reformats
+        // whatever carries no label (`OverlayFSUnpacker.unpackLayerToCache`),
+        // and that is the fix; this is the backstop, because the failure it
+        // catches is silent and a wrong rootfs is worse than a refusal to boot.
+        //
+        // **NOTHING DRIVES THIS PATH**, and it is named as an untested guard
+        // rather than left to read as a measured one: reaching it needs a guest
+        // whose layers all fail classification, which the host-side validation
+        // now prevents.
         guard !layers.isEmpty else {
-            log.info("\(writable) is present but no layer devices are, skipping OverlayFS")
-            return
+            log.error(
+                """
+                \(writable) is present but no layer devices are: the layers this container \
+                was built from could not be identified, and booting without them would run \
+                it on a rootfs that is not its image
+                """
+            )
+            exit(1)
         }
 
         log.info("detected \(layers.count) OverlayFS layer block devices: \(layers.joined(separator: ", "))")

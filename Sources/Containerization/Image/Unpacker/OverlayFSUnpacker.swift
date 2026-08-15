@@ -37,7 +37,7 @@ public protocol LayerCacheRecorder: Sendable {
 /// Instead of unpacking all layers sequentially into a single EXT4 filesystem,
 /// this unpacker:
 /// 1. Unpacks each layer to its own isolated EXT4 filesystem in parallel
-/// 2. Caches layers at ~/.arca/layers/{digest}/layer.ext4 for reuse
+/// 2. Caches layers at {layerCachePath}/{digest}/layer.ext4 for reuse
 /// 3. Returns configuration for OverlayFS stacking in guest VM
 ///
 /// Performance:
@@ -158,7 +158,10 @@ public struct OverlayFSUnpacker: Sendable {
     /// Unpack a single layer to cache directory
     ///
     /// Checks cache first, unpacks if missing. Layers are cached at:
-    /// ~/.arca/layers/{digest}/layer.ext4
+    /// {layerCachePath}/{digest}/layer.ext4 -- `<state-root>/layers` under
+    /// `arca-engine`, `~/.arca/layers` under `ArcaDaemon`. The path is the
+    /// caller's, and naming one of the two as though it were the only one is
+    /// what made this change's original mitigation instruction wrong.
     ///
     /// - Parameters:
     ///   - image: The OCI image
@@ -178,14 +181,41 @@ public struct OverlayFSUnpacker: Sendable {
         let layerDir = layerCachePath.appendingPathComponent(cacheKey)
         let layerPath = layerDir.appendingPathComponent("layer.ext4")
 
-        // Check cache
+        // Check cache. **A cached image counts as a hit only if it carries the
+        // role label**, because the guest classifies devices by that label and
+        // a layer without one is not skipped loudly -- it is skipped silently.
+        //
+        // ARCA PATCH. The label is written below, where a layer is FORMATTED,
+        // and formatting only happens on a miss. So every `layer.ext4` written
+        // before labels existed comes back through this branch unlabelled, and
+        // vminitd's classifier drops it with `is not an Arca role, leaving it
+        // alone`: some layers stale gives a rootfs built from a subset of its
+        // own image, all of them stale gives a container that does not run on
+        // its image at all, and both are silent. Validating here turns that
+        // into one more unpack.
+        //
+        // Nothing else refuses a stale image, because a stale image is a
+        // perfectly VALID ext4 filesystem -- it does not take the
+        // `invalidSuperBlock` path, it is merely unlabelled. The check is a
+        // 16-byte superblock read; `volumeLabel(ofBlockDevice:)` exists so that
+        // answering this question does not walk a multi-gigabyte layer.
         if FileManager.default.fileExists(atPath: layerPath.path) {
-            logger.debug("Layer cache HIT", metadata: [
+            let cachedRole = ArcaBlockDeviceRole.role(ofImageAt: FilePath(layerPath.path))
+            if cachedRole == .overlayLayer {
+                logger.debug("Layer cache HIT", metadata: [
+                    "layer": "\(index + 1)/\(totalLayers)",
+                    "digest": "\(cacheKey.prefix(19))...",
+                    "path": "\(layerPath.path)"
+                ])
+                return layerPath
+            }
+            logger.info("Layer cache entry carries no role label - reformatting", metadata: [
                 "layer": "\(index + 1)/\(totalLayers)",
                 "digest": "\(cacheKey.prefix(19))...",
-                "path": "\(layerPath.path)"
+                "path": "\(layerPath.path)",
+                "expected": "\(ArcaBlockDeviceRole.overlayLayer.volumeLabel)"
             ])
-            return layerPath
+            try FileManager.default.removeItem(at: layerPath)
         }
 
         logger.info("Layer cache MISS - unpacking", metadata: [
@@ -223,9 +253,16 @@ public struct OverlayFSUnpacker: Sendable {
         //
         // ARCA PATCH: the volume label is what tells the guest this image is a layer. Without
         // it vminitd cannot distinguish a layer from any other virtio-blk device and falls
-        // back on counting, which is the defect this replaces. Cached images written before
-        // the label existed carry none and are ignored by the guest -- clear
-        // ~/.arca/layers when adopting this change.
+        // back on counting, which is the defect this replaces.
+        //
+        // Cached images written before the label existed carry none. **Clearing the cache by
+        // hand is NO LONGER the mitigation and the instruction that said so named the wrong
+        // directory anyway**: the cache is wherever the caller rooted it, which is
+        // `<state-root>/layers` for `arca-engine` (`EnginePaths.layerCache`) and
+        // `~/.arca/layers` only for `ArcaDaemon`. An operator told to clear the latter would
+        // have cleared a directory the engine never reads. The cache-hit branch above now
+        // validates the label and reformats what fails, so an unlabelled entry costs one
+        // unpack instead of a silently wrong rootfs.
         let filesystem = try EXT4.Formatter(
             FilePath(layerPath.path),
             minDiskSize: 2 * 1024 * 1024 * 1024,  // 2 GB

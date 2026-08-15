@@ -169,10 +169,21 @@ enum ArcaBoot {
         }
         let writable = writables[0]
 
-        // A writable overlay with nothing to stack under it is not a shape the
-        // host ever builds deliberately: it attaches the writable image and the
-        // image's layers together. So a writable with no layers means the
-        // layers WERE attached and this guest could not identify them.
+        // A writable overlay with nothing to stack under it is not a shape a
+        // container with a NON-EMPTY image can produce. The writable is created
+        // and attached unconditionally and the layers come from
+        // `manifest.layers`, so for any ordinary image a writable with no layers
+        // means the layers WERE attached and this guest could not identify them.
+        //
+        // **An earlier version of this comment said "not a shape the host ever
+        // builds deliberately", and that was false.** Nothing refuses a
+        // zero-layer manifest -- a `FROM scratch` image or an OCI artifact
+        // produces exactly this shape on purpose, and such a container now dies
+        // here where before it booted on the bare initfs. Neither is right: its
+        // rootfs should be empty, and vminitd's is not empty. The refusal is the
+        // better of the two because it is loud, and the real fix is for the host
+        // to tell the guest how many layers it attached so the two cases can be
+        // told apart at all. Recorded as follow-up rather than done here.
         // Returning here would boot the container on the bare initfs instead of
         // on its own image -- `Start` succeeds, the container runs, and nothing
         // it was built from is present.

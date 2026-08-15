@@ -396,7 +396,10 @@ public struct ContainerManager: Sendable {
     /// Unpack image layers with OverlayFS support
     ///
     /// Uses parallel layer unpacking and caching for improved performance.
-    /// Layers are cached at ~/.arca/layers/{digest}/layer.ext4 and reused across containers.
+    /// Layers are cached at {layerCachePath}/{digest}/layer.ext4 and reused across containers.
+    /// The path is the caller's: `<state-root>/layers` under `arca-engine`, `~/.arca/layers`
+    /// under `ArcaDaemon`. Naming one as though it were the only one is what made the
+    /// stale-cache mitigation instruction point at a directory the engine never reads.
     ///
     /// - Parameters:
     ///   - image: The OCI image to unpack

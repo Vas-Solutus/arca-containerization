@@ -155,6 +155,50 @@ public struct OverlayFSUnpacker: Sendable {
         )
     }
 
+    /// Whether anything is cached at `path` at all.
+    ///
+    /// Trivial, and beside the two below so that the whole cache decision reads
+    /// in one place rather than half here and half in a `FileManager` call.
+    public static func cachedLayerExists(at path: URL) -> Bool {
+        FileManager.default.fileExists(atPath: path.path)
+    }
+
+    /// Whether the entry cached at `path` may be reused, or must be reformatted.
+    ///
+    /// **This is the fix for the stale-cache defect, split out because nothing
+    /// could measure it while it lived inline.** A reviewer bypassed the check
+    /// at its call site -- `if true || …` -- and `swift test --filter
+    /// ArcaEngineTests` stayed at 155 passing, because `unpackLayerToCache` is
+    /// private, needs an `Image`, and the live tier gives every engine a fresh
+    /// temp state root so the cache is *always* empty and this branch is never
+    /// entered there either. Testing the predicate underneath it was not the
+    /// same thing as testing the decision.
+    ///
+    /// **What is still unmeasured, stated because the alternative is a reader
+    /// assuming otherwise:** that `unpackLayerToCache` calls this, and calls
+    /// `discardCachedLayer` when it answers false. Closing that needs an
+    /// `Image` fixture, and this split is what makes the remaining gap one
+    /// line of wiring rather than the whole rule.
+    public static func cachedLayerIsReusable(at path: URL) -> Bool {
+        ArcaBlockDeviceRole.role(ofImageAt: FilePath(path.path)) == .overlayLayer
+    }
+
+    /// Removes a cache entry that cannot be reused, so the miss path rebuilds it.
+    ///
+    /// A concurrent create over the same digest can remove it first -- the
+    /// unpacker is re-entrant across `await` and two `Create`s can share a layer
+    /// -- so an entry that is already gone is the outcome this wanted, not a
+    /// failure. **Every other error is rethrown**: an entry that cannot be
+    /// removed will be handed to the guest unlabelled, which is the defect this
+    /// exists to prevent, and swallowing that would put it back silently.
+    public static func discardCachedLayer(at path: URL) throws {
+        do {
+            try FileManager.default.removeItem(at: path)
+        } catch {
+            guard !FileManager.default.fileExists(atPath: path.path) else { throw error }
+        }
+    }
+
     /// Unpack a single layer to cache directory
     ///
     /// Checks cache first, unpacks if missing. Layers are cached at:
@@ -199,9 +243,8 @@ public struct OverlayFSUnpacker: Sendable {
         // `invalidSuperBlock` path, it is merely unlabelled. The check is a
         // 16-byte superblock read; `volumeLabel(ofBlockDevice:)` exists so that
         // answering this question does not walk a multi-gigabyte layer.
-        if FileManager.default.fileExists(atPath: layerPath.path) {
-            let cachedRole = ArcaBlockDeviceRole.role(ofImageAt: FilePath(layerPath.path))
-            if cachedRole == .overlayLayer {
+        if Self.cachedLayerExists(at: layerPath) {
+            if Self.cachedLayerIsReusable(at: layerPath) {
                 logger.debug("Layer cache HIT", metadata: [
                     "layer": "\(index + 1)/\(totalLayers)",
                     "digest": "\(cacheKey.prefix(19))...",
@@ -215,7 +258,7 @@ public struct OverlayFSUnpacker: Sendable {
                 "path": "\(layerPath.path)",
                 "expected": "\(ArcaBlockDeviceRole.overlayLayer.volumeLabel)"
             ])
-            try FileManager.default.removeItem(at: layerPath)
+            try Self.discardCachedLayer(at: layerPath)
         }
 
         logger.info("Layer cache MISS - unpacking", metadata: [

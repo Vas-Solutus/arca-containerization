@@ -814,7 +814,21 @@ extension LinuxContainer {
                     // divergence besides: the day anything else marks a mount
                     // don't-auto-mount, it would reach the OCI spec carrying an empty
                     // destination -- which is not a mount any runtime can honour anyway.
-                    .filter { !$0.destination.isEmpty }
+                    //
+                    // **What it would cost is a diagnostic, and that is worth saying out
+                    // loud rather than leaving implied.** Reaching the spec, such a mount
+                    // fails in the runtime with a message naming it; dropped here it is
+                    // simply absent, which is this milestone's signature failure mode. The
+                    // log line below is what keeps it from vanishing silently.
+                    .filter { attached in
+                        if attached.destination.isEmpty && !attached.source.hasPrefix("/dev/vd") {
+                            self.logger?.warning(
+                                "dropping a mount with no destination",
+                                metadata: ["source": "\(attached.source)", "type": "\(attached.type)"]
+                            )
+                        }
+                        return !attached.destination.isEmpty
+                    }
                     .map { attached -> ContainerizationOCI.Mount in
                         if attached.type == "virtiofs" {
                             // Transform to bind mount from holding directory

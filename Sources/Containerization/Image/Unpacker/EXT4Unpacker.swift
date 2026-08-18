@@ -87,7 +87,12 @@ public struct EXT4Unpacker: Unpacker {
         // Resolve layer paths upfront. When progress reporting is enabled and a layer
         // uses zstd, decompress once so both the size-scanning pass and the unpack
         // pass share the same decompressed file.
-        var resolvedLayers: [(file: URL, filter: ContainerizationArchive.Filter)] = []
+        //
+        // ARCA PATCH: the digest and media type are carried through so that a layer this
+        // unpacker refuses can be NAMED -- see `LayerUnpackFailure`. They are recorded here
+        // rather than re-read below because the zstd branch replaces the file, so by the
+        // unpack loop the resolved entry is the only thing left that knows which layer it is.
+        var resolvedLayers: [(file: URL, filter: ContainerizationArchive.Filter, digest: String, mediaType: String)] = []
         var decompressedFiles: [URL] = []
         for layer in manifest.layers {
             try Task.checkCancellation()
@@ -96,9 +101,11 @@ public struct EXT4Unpacker: Unpacker {
             if progress != nil && compression == .zstd {
                 let decompressed = try ArchiveReader.decompressZstd(content.path)
                 decompressedFiles.append(decompressed)
-                resolvedLayers.append((file: decompressed, filter: .none))
+                resolvedLayers.append(
+                    (file: decompressed, filter: .none, digest: layer.digest, mediaType: layer.mediaType))
             } else {
-                resolvedLayers.append((file: content.path, filter: compression))
+                resolvedLayers.append(
+                    (file: content.path, filter: compression, digest: layer.digest, mediaType: layer.mediaType))
             }
         }
         defer {
@@ -129,14 +136,28 @@ public struct EXT4Unpacker: Unpacker {
             }
         }
 
-        for resolved in resolvedLayers {
+        for (index, resolved) in resolvedLayers.enumerated() {
             try Task.checkCancellation()
             let reader = try ArchiveReader(
                 format: .paxRestricted,
                 filter: resolved.filter,
                 file: resolved.file
             )
-            try await filesystem.unpack(reader: reader, progress: progress)
+            do {
+                try await filesystem.unpack(reader: reader, progress: progress)
+            } catch {
+                // ARCA PATCH: see `LayerUnpackFailure`. Unlike `OverlayFSUnpacker`, this
+                // unpacker stacks every layer into ONE filesystem, so the destination alone
+                // cannot say which layer refused -- it is the same path for all of them.
+                throw LayerUnpackFailure.naming(
+                    layer: index,
+                    of: resolvedLayers.count,
+                    digest: resolved.digest,
+                    mediaType: resolved.mediaType,
+                    destination: cleanedPath,
+                    cause: error
+                )
+            }
         }
 
         return .block(

@@ -199,6 +199,30 @@ public struct OverlayFSUnpacker: Sendable {
         }
     }
 
+    /// Moves a fully written layer onto its cache slot, atomically.
+    ///
+    /// **`rename(2)` rather than `FileManager.moveItem`, and the difference is not stylistic.**
+    /// `moveItem` fails when the destination exists, and the destination CAN exist here: the
+    /// unpacker is re-entrant across `await` and two `Create`s can share a layer digest -- the
+    /// case `discardCachedLayer` above is written for -- so the loser of that race would fail an
+    /// otherwise-successful create over work the winner had already completed. `rename` replaces
+    /// instead, and both images are complete, so which one wins does not matter. It is also the
+    /// half that makes the staging worth doing: replacement is atomic, so no reader ever sees a
+    /// partly written slot, and a reader holding the old file keeps reading the old inode.
+    ///
+    /// `staging` is created as a sibling of `path` for this: `rename` is only atomic, and only
+    /// works at all, within one filesystem.
+    static func promoteStagedLayer(at staging: URL, to path: URL) throws {
+        guard rename(staging.path, path.path) == 0 else {
+            let code = errno
+            throw ContainerizationError(
+                .internalError,
+                message: "failed to promote the unpacked layer at \(staging.path) onto "
+                    + "\(path.path): errno \(code) (\(String(cString: strerror(code))))"
+            )
+        }
+    }
+
     /// Unpack a single layer to cache directory
     ///
     /// Checks cache first, unpacks if missing. Layers are cached at:
@@ -306,20 +330,64 @@ public struct OverlayFSUnpacker: Sendable {
         // have cleared a directory the engine never reads. The cache-hit branch above now
         // validates the label and reformats what fails, so an unlabelled entry costs one
         // unpack instead of a silently wrong rootfs.
-        let filesystem = try EXT4.Formatter(
-            FilePath(layerPath.path),
-            minDiskSize: 2 * 1024 * 1024 * 1024,  // 2 GB
-            volumeLabel: ArcaBlockDeviceRole.overlayLayer.volumeLabel
-        )
-        defer { try? filesystem.close() }
-
-        // EXT4.Formatter.unpack became async upstream in the 2026-08 merge.
-        try await filesystem.unpack(
-            source: content.path,
-            format: .paxRestricted,
-            compression: compression,
-            progress: progress
-        )
+        //
+        // ARCA PATCH. **The slot's EXISTENCE is conditional on the unpack having succeeded,
+        // and that is not a tidiness point.** The formatter used to be created at `layerPath`
+        // itself under `defer { try? filesystem.close() }`, and `close()` is what writes the
+        // superblock and the label. So any throw between the two -- `unpack` refusing a blob
+        // that is not the archive its media type declares
+        // (`ContainerizationEXT4/Formatter+Unpack.swift:110-120`), or a sibling's failure
+        // cancelling this one mid-`unpackEntries` -- left a valid, correctly labelled, empty
+        // or partial `layer.ext4` in the cache. The create failed loudly ONCE; every create
+        // afterwards took the hit branch above, which tests the label alone, and got that
+        // empty layer. Labelled, so the guest classifies it; counted, so
+        // `ArcaLayerAttachment.resolve` sees `attached == identified` and resolves `.complete`.
+        // A rootfs built from none of that layer, with `Start` succeeding, and nothing to see.
+        //
+        // Formatting into a sibling of the slot and promoting only after `close()` RETURNS
+        // closes it at the source rather than by cleaning up after it: there is no window in
+        // which a labelled file sits at a path the cache reads, so a crash, a `SIGKILL` or a
+        // power loss mid-unpack cannot leave one either. A `catch` that discarded the slot and
+        // rethrew would close the throw case and leave that one open.
+        let staging = layerDir.appendingPathComponent("layer.ext4.staging-\(UUID().uuidString)")
+        do {
+            let filesystem = try EXT4.Formatter(
+                FilePath(staging.path),
+                minDiskSize: 2 * 1024 * 1024 * 1024,  // 2 GB
+                volumeLabel: ArcaBlockDeviceRole.overlayLayer.volumeLabel
+            )
+            do {
+                // EXT4.Formatter.unpack became async upstream in the 2026-08 merge.
+                try await filesystem.unpack(
+                    source: content.path,
+                    format: .paxRestricted,
+                    compression: compression,
+                    progress: progress
+                )
+                // NOT deferred. `close()` is the commit point, so its own failure has to reach
+                // the caller; a `defer { try? … }` would swallow it and promote whatever it
+                // managed to write.
+                try filesystem.close()
+            } catch {
+                // Releases the formatter's file handle and nothing more: everything it writes
+                // here is discarded with the staging file below.
+                try? filesystem.close()
+                throw error
+            }
+            try Self.promoteStagedLayer(at: staging, to: layerPath)
+        } catch {
+            try? FileManager.default.removeItem(at: staging)
+            // ARCA PATCH. This is the innermost frame that knows which layer this was; see
+            // `LayerUnpackFailure`.
+            throw LayerUnpackFailure.naming(
+                layer: index,
+                of: totalLayers,
+                digest: cacheKey,
+                mediaType: layer.mediaType,
+                destination: layerPath.path,
+                cause: error
+            )
+        }
 
         let unpackDuration = Date().timeIntervalSince(unpackStart)
         let layerSize = try FileManager.default.attributesOfItem(

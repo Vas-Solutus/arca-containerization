@@ -172,6 +172,33 @@ enum ArcaBoot {
         let layers = classified.filter { $0.role == .overlayLayer }.map(\.device)
 
         guard !writables.isEmpty || !layers.isEmpty else {
+            // ARCA PATCH. **This early return is the one branch the count did not guard, and
+            // it is the branch whose outcome is the silent wrong rootfs.** Booting on here
+            // runs the container on vminitd's OWN initfs -- `Start` succeeds, the container
+            // runs, and nothing it was built from is present -- so it is the same outcome the
+            // refusal below exists to prevent, reached before the refusal is reached.
+            //
+            // A non-nil count is by construction a disagreement here: a host that reports one
+            // has attached a writable and N layer devices, and this guest classified NONE of
+            // them. `attached == 0` is included for that reason and not by oversight -- the
+            // writable is still missing. A `writable.ext4` that predates the role label is the
+            // known route: `ContainerManager` formats the writable only when the file is
+            // absent, so an existing one is reused unlabelled and never self-heals, unlike a
+            // layer cache entry, which `OverlayFSUnpacker.unpackLayerToCache` reformats.
+            //
+            // `nil` still returns, and must: it is the only honest "no Arca overlay at all".
+            // Upstream's single-image boot reports nothing, and so does a pod VM (`LinuxPod`),
+            // which attaches no Arca overlay devices either. Neither is affected by this.
+            if let attachedOverlayLayers {
+                log.error(
+                    """
+                    the host reported \(attachedOverlayLayers) attached OverlayFS layer \
+                    device(s) and this guest classified no Arca block devices at all, not even \
+                    a writable: booting here would run the container on vminitd's own initfs
+                    """
+                )
+                exit(1)
+            }
             log.info("no OverlayFS block devices detected, using default rootfs")
             return
         }

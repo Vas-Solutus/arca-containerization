@@ -717,7 +717,13 @@ struct ArchiveReaderTests {
 /// `ARCHIVE_EOF` reports "the archive ended" for every reason an archive can stop
 /// producing headers — including the two ways a blob that is not the archive its
 /// declaration claims stops producing them. These tests pin the two signals that
-/// let a consumer tell the cases apart after the loop.
+/// let a caller tell the cases apart: `iterationFailure` and `decodedByteCount`.
+///
+/// **Coverage here is per-consumer, not per-signal, because the guard is.** Four
+/// places in this file loop over `archive_read_next_header2` — `Iterator.next()`,
+/// `StreamingIterator.next()`, `extractContents` and `extractFile` — and each
+/// needs its own guard, so each has its own test below. A fifth would need a
+/// fifth; nothing here generalises to a consumer that does not exist yet.
 struct ArchiveReaderMistypedBlobTests {
     private func writeTar(at url: URL, filter: Filter) throws {
         let archiver = try ArchiveWriter(format: .paxRestricted, filter: filter, file: url)
@@ -886,6 +892,45 @@ struct ArchiveReaderMistypedBlobTests {
         }
         let failure = try #require(thrown as? ArchiveError)
         #expect(failure.description.contains("Damaged tar archive"))
+    }
+
+    /// `extractFile` runs its own `while … != ARCHIVE_EOF` loop rather than going
+    /// through either iterator, so it needs its own guard and its own test. It is
+    /// the worst-placed copy of the hole: the non-advancing `ARCHIVE_FATAL` never
+    /// leaves that loop, and unlike `unpackEntries` there is no cancellation check
+    /// inside it, so a regression here could not even be time-limited out of.
+    ///
+    /// Raw bytes rather than gzip bytes for the same reason as the
+    /// `extractContents` test — a stream that ends, so this fails rather than
+    /// hangs — and the assertion names the read failure because the pre-existing
+    /// `not found in archive` path throws an `ArchiveError` of its own.
+    @Test func extractFileRefusesABlobItCannotRead() throws {
+        let url = try temporaryFile(named: "raw-declared-none-extractfile.tar")
+        try Data(repeating: 0x41, count: 64 * 1024).write(to: url)
+
+        let reader = try ArchiveReader(format: .paxRestricted, filter: .none, file: url)
+        var thrown: (any Error)?
+        do {
+            _ = try reader.extractFile(path: "file1")
+        } catch {
+            thrown = error
+        }
+        let failure = try #require(thrown as? ArchiveError)
+        #expect(failure.description.contains("Damaged tar archive"))
+    }
+
+    /// The success path of the same method, which had no test at all before this,
+    /// so the guard above cannot be satisfied by a version that refuses
+    /// everything.
+    @Test func extractFileReturnsTheNamedEntryOfAnHonestArchive() throws {
+        let url = try temporaryFile(named: "honest-extractfile.tar")
+        try writeTar(at: url, filter: .none)
+
+        let reader = try ArchiveReader(format: .paxRestricted, filter: .none, file: url)
+        let (entry, data) = try reader.extractFile(path: "file1")
+
+        #expect(entry.path == "/file1")
+        #expect(data == Data("hello".utf8))
     }
 
     private func createExtractionDirectory(name: String) throws -> URL {

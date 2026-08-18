@@ -94,10 +94,16 @@ public final class ArchiveReader {
         return "a \(declaredFormat.rawValue) archive with filter \(declaredFilter.rawValue)"
     }
 
-    fileprivate func recordIterationFailure(_ result: CInt) {
+    /// The error libarchive is reporting for a header read that failed, for the
+    /// two callers that need it: one records it, one throws it.
+    fileprivate func headerReadFailure(_ result: CInt) -> ArchiveError {
         let message = archive_error_string(underlying).map(String.init(cString:)) ?? "no error reported"
-        iterationFailure = .failedToExtractArchive(
+        return .failedToExtractArchive(
             "reading the next archive header failed with code \(result): \(message)")
+    }
+
+    fileprivate func recordIterationFailure(_ result: CInt) {
+        iterationFailure = headerReadFailure(result)
     }
 
     fileprivate func clearIterationFailure() {
@@ -388,9 +394,21 @@ extension ArchiveReader {
     /// meaning subsequent reads will start from a new location.
     /// To reset the underlying file descriptor to the beginning of the archive, close and
     /// reopen the archive.
+    ///
+    /// A read that fails is thrown rather than searched past: `ARCHIVE_FATAL` does
+    /// not advance the stream, so `while … != ARCHIVE_EOF` would never end, and a
+    /// milder failure would end in "not found in archive" for a file the archive
+    /// may well contain.
     public func extractFile(path: String) throws -> (WriteEntry, Data) {
         let entry = WriteEntry()
-        while archive_read_next_header2(self.underlying, entry.underlying) != ARCHIVE_EOF {
+        while true {
+            let result = archive_read_next_header2(self.underlying, entry.underlying)
+            if result == ARCHIVE_EOF {
+                break
+            }
+            guard result.isReadableHeader else {
+                throw headerReadFailure(result)
+            }
             guard let entryPath = entry.path else { continue }
             let trimCharSet = CharacterSet(charactersIn: "./")
             let trimmedEntry = entryPath.trimmingCharacters(in: trimCharSet)

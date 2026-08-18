@@ -413,6 +413,31 @@ extension VZVirtualMachineInstance.Configuration {
         return [c]
     }
 
+    /// ARCA PATCH: the boot loader this configuration boots with, built apart from `toVZ`.
+    ///
+    /// **Extracted so the layer count's last host-side hop can be tested at all.** `toVZ` ends
+    /// in `VZVirtualMachineConfiguration.validate()`, which needs the virtualization
+    /// entitlement even when no virtual machine is built (MEASURED: a bare configuration
+    /// carrying only a `VZLinuxBootLoader` throws `VZErrorDomain Code=2 ... doesn't have the
+    /// "com.apple.security.virtualization" entitlement` from `validate()` alone), so no unit
+    /// test can reach `toVZ`'s return value. This can be called directly.
+    ///
+    /// **`attachedOverlayLayers` is read from `self` and is deliberately not a parameter.**
+    /// That is the point of the extraction rather than an accident of it: `toVZ` now has no
+    /// count to pass, so it cannot pass the wrong one, and reporting a number that disagrees
+    /// with the devices attached stops being a thing a caller can do. `kernel` and
+    /// `initialFilesystem` ARE parameters, so that `toVZ`'s two `guard`s stay exactly where and
+    /// in the order they were -- moving them here would either duplicate the second one or
+    /// swap which of the two errors a configuration missing both reports.
+    func linuxBootLoader(kernel: Kernel, initialFilesystem: Mount) -> VZLinuxBootLoader {
+        let loader = VZLinuxBootLoader(kernelURL: kernel.path)
+        loader.commandLine = kernel.linuxCommandline(
+            initialFilesystem: initialFilesystem,
+            attachedOverlayLayers: self.attachedOverlayLayers
+        )
+        return loader
+    }
+
     func toVZ(allocator: any AddressAllocator<Character>) throws -> VZVirtualMachineConfiguration {
         var config = VZVirtualMachineConfiguration()
 
@@ -472,12 +497,7 @@ extension VZVirtualMachineInstance.Configuration {
             throw ContainerizationError(.invalidArgument, message: "rootfs cannot be nil")
         }
 
-        let loader = VZLinuxBootLoader(kernelURL: kernel.path)
-        loader.commandLine = kernel.linuxCommandline(
-            initialFilesystem: initialFilesystem,
-            attachedOverlayLayers: self.attachedOverlayLayers
-        )
-        config.bootLoader = loader
+        config.bootLoader = self.linuxBootLoader(kernel: kernel, initialFilesystem: initialFilesystem)
 
         try initialFilesystem.configure(config: &config)
 

@@ -18,7 +18,16 @@ extension Kernel {
     /// Build the `init=/sbin/vminitd` Linux kernel command line for the given
     /// rootfs type. Used by both the VZ and cloud-hypervisor backends since
     /// the guest's vminitd init contract is identical across VMMs.
-    func linuxCommandline(initialFilesystem: Mount) -> String {
+    ///
+    /// ARCA PATCH: `attachedOverlayLayers` is how many OverlayFS layer block devices this VM
+    /// is being given, reported to vminitd as an init argument. It has NO default value on
+    /// purpose. This function is the single point both backends build a command line through
+    /// (`VZVirtualMachineInstance.toVZ`, `CHVirtualMachineInstance.buildVmConfig`), so a
+    /// required parameter is what makes "one backend reports and the other does not" fail to
+    /// compile rather than fail in a guest. `nil` means this VM has no Arca overlay at all --
+    /// upstream's own rootfs-in-a-single-image boot -- and is not the same claim as `0`.
+    /// See `ArcaLayerAttachment`.
+    func linuxCommandline(initialFilesystem: Mount, attachedOverlayLayers: Int?) -> String {
         var args = self.commandLine.kernelArgs
 
         args.append("init=/sbin/vminitd")
@@ -40,9 +49,17 @@ extension Kernel {
             fatalError("unsupported initfs filesystem \(initialFilesystem.type)")
         }
 
-        if self.commandLine.initArgs.count > 0 {
+        // ARCA PATCH: the layer count is an init argument and never a kernel argument. The
+        // kernel would parse it, fail to recognise it, and hand it to init as an environment
+        // entry instead; everything after `--` is init's argv by contract.
+        var initArgs = self.commandLine.initArgs
+        if let attachedOverlayLayers {
+            initArgs.append(ArcaLayerAttachment.initArgument(attached: attachedOverlayLayers))
+        }
+
+        if initArgs.count > 0 {
             args.append("--")
-            args.append(contentsOf: self.commandLine.initArgs)
+            args.append(contentsOf: initArgs)
         }
 
         return args.joined(separator: " ")

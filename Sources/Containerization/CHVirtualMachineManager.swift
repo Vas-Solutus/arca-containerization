@@ -104,6 +104,9 @@ public struct CHVirtualMachineManager: VirtualMachineManager {
         instanceConfig.extensions = vmConfig.extensions
         instanceConfig.kernel = kernel
         instanceConfig.initialFilesystem = initialFilesystem
+        // ARCA PATCH: carried beside the mounts it counts, so the number the guest is told and
+        // the devices it is given come from the same configuration.
+        instanceConfig.attachedOverlayLayers = vmConfig.attachedOverlayLayers
 
         return try CHVirtualMachineInstance(
             group: group,

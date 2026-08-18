@@ -145,13 +145,26 @@ enum ArcaBoot {
         return classified
     }
 
+    /// The lowerdir a zero-layer image contributes: nothing, in a form overlayfs will take.
+    ///
+    /// An image with no layers still needs a lower level, because an overlay is not a valid
+    /// mount without one. An empty directory on the scratch tmpfs is that image's contents
+    /// exactly, and it keeps one mounting path for every container rather than a second,
+    /// rarely-taken one whose first exercise would be in production.
+    private static let emptyLayerMountPoint = "/mnt/emptyimage"
+
     /// Mounts the OverlayFS writable device and layer devices, and prepares the mount options.
     ///
     /// Devices are identified by the `ArcaBlockDeviceRole` in their ext4 volume label, never by
     /// position or count. The previous version scanned /dev/vdc upwards until a device was
     /// missing and called everything it found a layer, which silently swallowed the named
     /// volumes attached after the layers and mounted them read-only as lowerdirs.
-    static func prepareOverlayFS(log: Logger) async {
+    ///
+    /// `attachedOverlayLayers` is how many layer devices the host says it attached, and it is
+    /// a cross-check on that classification, never a replacement for it: nothing below picks a
+    /// device by counting. It is `nil` when no host reported one, which is refused rather than
+    /// read as zero -- see `ArcaLayerAttachment`.
+    static func prepareOverlayFS(log: Logger, attachedOverlayLayers: Int?) async {
         let classified = labelledBlockDevices(log: log)
         let writables = classified.filter { $0.role == .overlayWritable }.map(\.device)
         // Sorted by `labelledBlockDevices`, so this is the host's attach order, which is
@@ -169,47 +182,50 @@ enum ArcaBoot {
         }
         let writable = writables[0]
 
-        // A writable overlay with nothing to stack under it is not a shape a
-        // container with a NON-EMPTY image can produce. The writable is created
-        // and attached unconditionally and the layers come from
-        // `manifest.layers`, so for any ordinary image a writable with no layers
-        // means the layers WERE attached and this guest could not identify them.
+        // A writable overlay with nothing under it used to be two situations wearing one
+        // observation, and this guard used to refuse both of them.
         //
-        // **An earlier version of this comment said "not a shape the host ever
-        // builds deliberately", and that was false.** Nothing refuses a
-        // zero-layer manifest -- a `FROM scratch` image or an OCI artifact
-        // produces exactly this shape on purpose, and such a container now dies
-        // here where before it booted on the bare initfs. Neither is right: its
-        // rootfs should be empty, and vminitd's is not empty. The refusal is the
-        // better of the two because it is loud, and the real fix is for the host
-        // to tell the guest how many layers it attached so the two cases can be
-        // told apart at all. Recorded as follow-up rather than done here.
-        // Returning here would boot the container on the bare initfs instead of
-        // on its own image -- `Start` succeeds, the container runs, and nothing
-        // it was built from is present.
+        // An image that genuinely has no layers -- `FROM scratch`, an OCI artifact; nothing
+        // refuses a zero-layer manifest -- produces exactly the same devices as an image whose
+        // layers WERE attached and which this guest could not identify. The first deserves an
+        // empty rootfs and the second must not boot at all, and no amount of looking at the
+        // devices present can separate them, because what distinguishes them is a device that
+        // is absent in one case and unrecognised in the other.
         //
-        // The known way to reach it is a layer cache written before the role
-        // label existed. The host now validates cache entries and reformats
-        // whatever carries no label (`OverlayFSUnpacker.unpackLayerToCache`),
-        // and that is the fix; this is the backstop, because the failure it
-        // catches is silent and a wrong rootfs is worse than a refusal to boot.
+        // The host now says how many it attached, so the two are different arithmetic:
+        // `0 == 0` is the empty image and `N > identified` is the failure. The refusal names
+        // both numbers, which is the diagnostic the single-number message could not produce.
+        // Booting anyway would run the container on the bare initfs -- `Start` succeeds, the
+        // container runs, and nothing it was built from is present.
         //
-        // **NOTHING DRIVES THIS PATH**, and it is named as an untested guard
-        // rather than left to read as a measured one: reaching it needs a guest
-        // whose layers all fail classification, which the host-side validation
-        // now prevents.
-        guard !layers.isEmpty else {
-            log.error(
-                """
-                \(writable) is present but no layer devices are: the layers this container \
-                was built from could not be identified, and booting without them would run \
-                it on a rootfs that is not its image
-                """
-            )
+        // One known route to a disagreement remains, and it is not the one Task 6 closed at
+        // unpack time: a layer cache written before the role label existed. The host validates
+        // cache entries and reformats whatever carries no label
+        // (`OverlayFSUnpacker.unpackLayerToCache`); this stands on its own regardless, because
+        // the failure it catches is silent and a wrong rootfs is worse than a refusal to boot.
+        //
+        // A count that never arrived is `nil` and is refused too, rather than read as zero:
+        // "the host attached none" and "no host said anything" are different claims, and only
+        // the first describes an empty image. A pod VM (`LinuxPod`) reports no count because
+        // one number cannot describe several containers' images -- it also attaches no Arca
+        // overlay devices, so it returns above and never reaches here.
+        let attachment = ArcaLayerAttachment.resolve(attached: attachedOverlayLayers, identified: layers.count)
+        if let refusal = attachment.refusal {
+            log.error("\(writable) is present but \(refusal)")
             exit(1)
         }
 
-        log.info("detected \(layers.count) OverlayFS layer block devices: \(layers.joined(separator: ", "))")
+        // Past the refusal both numbers are equal, so one of them says everything.
+        if layers.isEmpty {
+            log.info("the host attached no OverlayFS layer devices and this guest identified none: an empty image")
+        } else {
+            log.info(
+                """
+                the host attached \(layers.count) OverlayFS layer block devices and this guest \
+                identified all of them: \(layers.joined(separator: ", "))
+                """
+            )
+        }
 
         // Create mount point and mount writable filesystem
         try? FileManager.default.createDirectory(atPath: "/mnt/writable", withIntermediateDirectories: true)
@@ -228,6 +244,22 @@ enum ArcaBoot {
                 exit(1)
             }
             lowerDirs.append(mnt)
+        }
+
+        // An image with no layers contributes an empty directory, because an overlay with no
+        // lowerdir at all is not a mount the kernel accepts and `lowerdir=` would fail at the
+        // rootfs mount RPC, long after the decision that produced it.
+        if lowerDirs.isEmpty {
+            do {
+                try FileManager.default.createDirectory(
+                    atPath: Self.emptyLayerMountPoint,
+                    withIntermediateDirectories: true
+                )
+            } catch {
+                log.error("failed to create \(Self.emptyLayerMountPoint) for an image with no layers: \(error)")
+                exit(1)
+            }
+            lowerDirs.append(Self.emptyLayerMountPoint)
         }
 
         // Create upper and work directories

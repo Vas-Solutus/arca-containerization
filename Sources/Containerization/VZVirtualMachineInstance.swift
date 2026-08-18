@@ -85,6 +85,9 @@ public final class VZVirtualMachineInstance: Sendable {
         public var bootLog: BootLog?
         /// Extension objects that participate in the VM instance lifecycle.
         public var extensions: [any Sendable] = []
+        /// ARCA PATCH: how many OverlayFS layer block devices this VM is being given.
+        /// See ``ArcaLayerAttachment``.
+        public var attachedOverlayLayers: Int?
 
         public init() {
             self.cpus = 4
@@ -470,7 +473,10 @@ extension VZVirtualMachineInstance.Configuration {
         }
 
         let loader = VZLinuxBootLoader(kernelURL: kernel.path)
-        loader.commandLine = kernel.linuxCommandline(initialFilesystem: initialFilesystem)
+        loader.commandLine = kernel.linuxCommandline(
+            initialFilesystem: initialFilesystem,
+            attachedOverlayLayers: self.attachedOverlayLayers
+        )
         config.bootLoader = loader
 
         try initialFilesystem.configure(config: &config)

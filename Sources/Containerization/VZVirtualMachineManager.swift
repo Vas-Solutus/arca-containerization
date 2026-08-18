@@ -78,6 +78,9 @@ public struct VZVirtualMachineManager: VirtualMachineManager {
 
                 instanceConfig.mountsByID = vmConfig.mountsByID
                 instanceConfig.extensions = vmConfig.extensions
+                // ARCA PATCH: carried beside the mounts it counts, so the number the guest is
+                // told and the devices it is given come from the same configuration.
+                instanceConfig.attachedOverlayLayers = vmConfig.attachedOverlayLayers
             })
     }
 }

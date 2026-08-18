@@ -84,6 +84,11 @@ public struct VMConfiguration: Sendable {
     /// Extension packages append their types here; VZ-aware extensions
     /// should conform to ``VZInstanceExtension``.
     public var extensions: [any Sendable] = []
+    /// ARCA PATCH: how many OverlayFS layer block devices this VM is being given, reported to
+    /// the guest so it can tell an image with no layers from layers it failed to identify.
+    /// `nil` for a VM with no Arca overlay, which is not the same claim as `0`.
+    /// See ``ArcaLayerAttachment``.
+    public var attachedOverlayLayers: Int?
 
     public init(
         cpus: Int = 4,
@@ -91,7 +96,8 @@ public struct VMConfiguration: Sendable {
         interfaces: [any Interface] = [],
         mountsByID: [String: [Mount]] = [:],
         bootLog: BootLog? = nil,
-        nestedVirtualization: Bool = false
+        nestedVirtualization: Bool = false,
+        attachedOverlayLayers: Int? = nil
     ) {
         self.cpus = cpus
         self.memoryInBytes = memoryInBytes
@@ -99,5 +105,6 @@ public struct VMConfiguration: Sendable {
         self.mountsByID = mountsByID
         self.bootLog = bootLog
         self.nestedVirtualization = nestedVirtualization
+        self.attachedOverlayLayers = attachedOverlayLayers
     }
 }

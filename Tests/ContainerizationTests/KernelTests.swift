@@ -90,4 +90,67 @@ final class KernelTests {
         commandLine.setAgentLogLevel(level: .warning)
         #expect(commandLine.kernelArgs == kernelArgsBefore)
     }
+
+    // MARK: - ARCA PATCH: the attached-layer count on the command line
+    //
+    // This is the channel the host tells the guest how many OverlayFS layer devices it
+    // attached over. `linuxCommandline` is the single function both VMM backends build a
+    // command line through, which is why the count goes here rather than into either backend:
+    // one of them reporting and the other not would leave the guest's check working on one
+    // VMM and refusing every boot on the other.
+
+    private func kernel(initArgs: [String] = []) -> Kernel {
+        Kernel(
+            path: .init(fileURLWithPath: "/vmlinux"),
+            platform: .linuxArm,
+            commandline: Kernel.CommandLine(kernelArgs: [], initArgs: initArgs)
+        )
+    }
+
+    private var ext4Rootfs: Mount {
+        .block(format: "ext4", source: "/initfs.ext4", destination: "/", options: [])
+    }
+
+    @Test func theAttachedLayerCountReachesTheGuestAsAnInitArgument() {
+        let cmdline = kernel().linuxCommandline(initialFilesystem: ext4Rootfs, attachedOverlayLayers: 4)
+
+        // After `--`, which is what the kernel hands to init as its argv. Before it, the
+        // kernel would parse it as one of its own parameters and vminitd would never see it.
+        #expect(cmdline.hasSuffix("-- --arca-attached-layers=4"))
+    }
+
+    /// Zero is a claim the guest acts on -- it is what an image with no layers looks like --
+    /// so it must be sent, not elided as "nothing to say".
+    @Test func zeroAttachedLayersIsReportedAndIsNotSilence() {
+        let cmdline = kernel().linuxCommandline(initialFilesystem: ext4Rootfs, attachedOverlayLayers: 0)
+
+        #expect(cmdline.contains("-- --arca-attached-layers=0"))
+    }
+
+    /// A VM with no Arca overlay says nothing, which the guest distinguishes from `0`.
+    @Test func aVMWithNoOverlayReportsNoCountAtAll() {
+        let cmdline = kernel().linuxCommandline(initialFilesystem: ext4Rootfs, attachedOverlayLayers: nil)
+
+        #expect(!cmdline.contains("arca-attached-layers"))
+        #expect(!cmdline.contains("--"))
+    }
+
+    /// The count is appended to whatever init arguments were already configured rather than
+    /// replacing them: `setAgentLogLevel` puts `--log-level` in the same list.
+    @Test func theCountJoinsExistingInitArgsWithoutDisplacingThem() {
+        let cmdline = kernel(initArgs: ["--log-level", "debug"])
+            .linuxCommandline(initialFilesystem: ext4Rootfs, attachedOverlayLayers: 2)
+
+        #expect(cmdline.hasSuffix("-- --log-level debug --arca-attached-layers=2"))
+    }
+
+    /// Reporting the count must not disturb the kernel's own parameters, which decide how the
+    /// guest boots at all.
+    @Test func reportingTheCountLeavesTheKernelArgumentsAlone() {
+        let boot = kernel().linuxCommandline(initialFilesystem: ext4Rootfs, attachedOverlayLayers: nil)
+        let reported = kernel().linuxCommandline(initialFilesystem: ext4Rootfs, attachedOverlayLayers: 3)
+
+        #expect(reported == boot + " -- --arca-attached-layers=3")
+        #expect(boot == "init=/sbin/vminitd ro rootfstype=ext4 root=/dev/vda")
+    }
 }

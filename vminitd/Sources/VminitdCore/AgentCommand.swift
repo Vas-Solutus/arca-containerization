@@ -47,11 +47,24 @@ public struct AgentCommand: AsyncParsableCommand {
 
     @OptionGroup var options: LogLevelOption
 
+    /// ARCA PATCH: how many OverlayFS layer block devices the host says it attached.
+    ///
+    /// Reaches this process as its own argv: the host puts it in the kernel command line's
+    /// init arguments, after `--`, and `Application.main()` parses `/proc/self/cmdline`.
+    /// Absent means no host said anything, which `ArcaBoot.prepareOverlayFS` refuses rather
+    /// than reads as zero. The flag is spelled once, in `ArcaLayerAttachment`, and both the
+    /// host that writes it and this option that reads it take it from there.
+    @Option(
+        name: .customLong(ArcaLayerAttachment.commandLineFlag),
+        help: "How many OverlayFS layer block devices the host attached to this VM."
+    )
+    var attachedOverlayLayers: Int?
+
     public init() {}
 
     /// Bootstrap the vminitd environment and create an Initd server.
     /// Handles mounts, cgroups, memory monitoring, and all pre-serve setup.
-    public static func bootstrap(options: LogLevelOption) async throws -> Initd {
+    public static func bootstrap(options: LogLevelOption, attachedOverlayLayers: Int?) async throws -> Initd {
         let log = makeLogger(label: "vminitd", level: options.resolvedLogLevel())
         try adjustLimits(log)
 
@@ -65,7 +78,7 @@ public struct AgentCommand: AsyncParsableCommand {
         log.info("checking for shim var \(foregroundEnvVar)=\(String(describing: foreground))")
 
         if foreground == nil {
-            try runInForeground(log, logLevel: options.logLevel)
+            try runInForeground(log, logLevel: options.logLevel, attachedOverlayLayers: attachedOverlayLayers)
             _exit(0)
         }
 
@@ -158,7 +171,7 @@ public struct AgentCommand: AsyncParsableCommand {
         // ARCA PATCH: start the guest services and prepare OverlayFS layers before the API
         // begins serving. Both previously lived inline in Application.run(); see ArcaBoot.
         ArcaBoot.startServices(log: log)
-        await ArcaBoot.prepareOverlayFS(log: log)
+        await ArcaBoot.prepareOverlayFS(log: log, attachedOverlayLayers: attachedOverlayLayers)
 
         let eg = MultiThreadedEventLoopGroup(numberOfThreads: 1)
         let blockingPool = NIOThreadPool(numberOfThreads: 2)
@@ -167,7 +180,7 @@ public struct AgentCommand: AsyncParsableCommand {
     }
 
     public mutating func run() async throws {
-        let server = try await Self.bootstrap(options: options)
+        let server = try await Self.bootstrap(options: options, attachedOverlayLayers: attachedOverlayLayers)
 
         do {
             server.log.info("serving vminitd API")
@@ -188,10 +201,20 @@ public struct AgentCommand: AsyncParsableCommand {
         }
     }
 
-    private static func runInForeground(_ log: Logger, logLevel: String) throws {
+    /// ARCA PATCH: `attachedOverlayLayers` is forwarded explicitly.
+    ///
+    /// This re-exec builds a fresh argv and replaces the environment outright, so anything the
+    /// host put on the kernel command line reaches the child only if it is named here. A DEBUG
+    /// guest that dropped the count would refuse every boot with "the host did not report", and
+    /// the flag that made it do so would be this one, not the host's.
+    private static func runInForeground(_ log: Logger, logLevel: String, attachedOverlayLayers: Int?) throws {
         log.info("running vminitd under pid1")
 
-        var command = Command("/sbin/vminitd", arguments: ["agent", "--log-level", logLevel])
+        var arguments = ["agent", "--log-level", logLevel]
+        if let attachedOverlayLayers {
+            arguments.append(ArcaLayerAttachment.initArgument(attached: attachedOverlayLayers))
+        }
+        var command = Command("/sbin/vminitd", arguments: arguments)
         command.attrs = .init(setsid: true)
         command.stdin = .standardInput
         command.stdout = .standardOutput

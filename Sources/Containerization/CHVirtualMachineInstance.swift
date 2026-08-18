@@ -52,6 +52,9 @@ public final class CHVirtualMachineInstance: Sendable {
         public var initialFilesystem: Mount?
         public var bootLog: BootLog?
         public var extensions: [any Sendable] = []
+        /// ARCA PATCH: how many OverlayFS layer block devices this VM is being given.
+        /// See ``ArcaLayerAttachment``.
+        public var attachedOverlayLayers: Int?
 
         public init() {
             self.cpus = 4
@@ -592,7 +595,10 @@ extension CHVirtualMachineInstance {
 
         let payload = CloudHypervisor.PayloadConfig(
             kernel: kernel.path.path,
-            cmdline: kernel.linuxCommandline(initialFilesystem: rootfs)
+            cmdline: kernel.linuxCommandline(
+                initialFilesystem: rootfs,
+                attachedOverlayLayers: config.attachedOverlayLayers
+            )
         )
 
         return CloudHypervisor.VmConfig(

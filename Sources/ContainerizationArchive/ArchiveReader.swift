@@ -57,6 +57,53 @@ public final class ArchiveReader {
     /// Temporary decompressed file URL if the input was zstd-compressed
     private var tempDecompressedFile: URL?
 
+    /// The format the caller declared the archive to be in, or `nil` when this
+    /// reader was asked to detect the format itself.
+    public private(set) var declaredFormat: Format?
+    /// The filter the caller declared the archive to be encoded with, or `nil`
+    /// when this reader was asked to detect the filter itself.
+    public private(set) var declaredFilter: Filter?
+
+    /// The libarchive failure that ended the most recent iteration, if it ended
+    /// in a failure rather than at the end of the archive.
+    ///
+    /// `IteratorProtocol.next()` cannot throw, so an iterator has exactly one way
+    /// to stop and it means "no more entries" whether the archive ended or the
+    /// read failed. Recording the failure here is what lets a consumer tell the
+    /// two apart once its loop is over; it must check.
+    public private(set) var iterationFailure: ArchiveError?
+
+    /// The number of bytes the format handler has consumed, counted at the end of
+    /// the filter chain and therefore *after* any decompression.
+    ///
+    /// A declared filter that cannot decode the source produces an empty stream
+    /// rather than an error, which the format handler reports as a clean end of
+    /// file. No archive of any format is zero bytes long, so a completed
+    /// iteration leaving this at zero means the bytes are not what they were
+    /// declared to be.
+    public var decodedByteCount: Int64 {
+        archive_filter_bytes(underlying, 0)
+    }
+
+    /// What the caller declared this archive to be, for naming both sides of a
+    /// disagreement between a declaration and the bytes.
+    public var declaration: String {
+        guard let declaredFormat, let declaredFilter else {
+            return "an archive of self-detected format and filter"
+        }
+        return "a \(declaredFormat.rawValue) archive with filter \(declaredFilter.rawValue)"
+    }
+
+    fileprivate func recordIterationFailure(_ result: CInt) {
+        let message = archive_error_string(underlying).map(String.init(cString:)) ?? "no error reported"
+        iterationFailure = .failedToExtractArchive(
+            "reading the next archive header failed with code \(result): \(message)")
+    }
+
+    fileprivate func clearIterationFailure() {
+        iterationFailure = nil
+    }
+
     /// Initializes an `ArchiveReader` to read from a specified file URL with an explicit `Format` and `Filter`.
     /// Note: This method must be used when it is known that the archive at the specified URL follows the specified
     /// `Format` and `Filter`.
@@ -87,6 +134,9 @@ public final class ArchiveReader {
             throw error
         }
         self.tempDecompressedFile = tempFile
+        // The designated initializer saw the substituted filter, not the one the
+        // caller declared; the declaration is what an error has to name.
+        self.declaredFilter = filter
     }
 
     /// Initializes an `ArchiveReader` to read from the provided file descriptor with an explicit `Format` and `Filter`.
@@ -95,6 +145,8 @@ public final class ArchiveReader {
     public init(format: Format, filter: Filter, fileHandle: FileHandle) throws {
         self.underlying = archive_read_new()
         self.fileHandle = fileHandle
+        self.declaredFormat = format
+        self.declaredFilter = filter
 
         try archive_read_set_format(underlying, format.code)
             .checkOk(elseThrow: .unableToSetFormat(format.code, format))
@@ -185,11 +237,21 @@ extension CInt {
         guard self == ARCHIVE_OK else { throw error(self) }
     }
 
+    /// Whether a result from `archive_read_next_header2` left a usable entry
+    /// behind. `ARCHIVE_WARN` does — libarchive uses it for problems it recovered
+    /// from, such as a pax extended-attribute record it could not parse — so
+    /// warnings must keep an otherwise sound archive readable. Everything below it
+    /// does not. `ArchiveReaderMistypedBlobTests.aWarnedButUsableHeaderIsStillAnEntry`
+    /// is the guard on the distinction.
+    fileprivate var isReadableHeader: Bool {
+        self == ARCHIVE_OK || self == ARCHIVE_WARN
+    }
 }
 
 extension ArchiveReader: Sequence {
     public func makeIterator() -> Iterator {
-        Iterator(reader: self)
+        clearIterationFailure()
+        return Iterator(reader: self)
     }
 
     public struct Iterator: IteratorProtocol {
@@ -201,6 +263,10 @@ extension ArchiveReader: Sequence {
             if result == ARCHIVE_EOF {
                 return nil
             }
+            guard result.isReadableHeader else {
+                reader.recordIterationFailure(result)
+                return nil
+            }
             let data = reader.readDataForEntry(entry)
             return (entry, data)
         }
@@ -208,7 +274,8 @@ extension ArchiveReader: Sequence {
 
     /// Returns an iterator that yields archive entries.
     public func makeStreamingIterator() -> StreamingIterator {
-        StreamingIterator(reader: self)
+        clearIterationFailure()
+        return StreamingIterator(reader: self)
     }
 
     public struct StreamingIterator: Sequence, IteratorProtocol {
@@ -222,6 +289,10 @@ extension ArchiveReader: Sequence {
             let entry = WriteEntry()
             let result = archive_read_next_header2(reader.underlying, entry.underlying)
             if result == ARCHIVE_EOF {
+                return nil
+            }
+            guard result.isReadableHeader else {
+                reader.recordIterationFailure(result)
                 return nil
             }
             let streamReader = ArchiveEntryReader(reader: reader)
@@ -301,6 +372,9 @@ extension ArchiveReader {
             if !extracted {
                 rejectedPaths.append(memberPath.string)
             }
+        }
+        if let iterationFailure {
+            throw iterationFailure
         }
         guard foundEntry else {
             throw ArchiveError.failedToExtractArchive("no entries found in archive")

@@ -96,7 +96,27 @@ extension EXT4.Formatter {
                 totalSize += Int64(size)
             }
         }
+        try Self.rejectBlobUnmatchedByDeclaration(reader)
         return (size: totalSize, items: totalItems)
+    }
+
+    /// Refuse a source that is not the archive the reader was told it is.
+    ///
+    /// Both callers reach this after iterating a reader to a stop, and an iterator
+    /// stops for three reasons that are indistinguishable from inside the loop:
+    /// the archive ended, the read failed, or the declared filter never decoded
+    /// anything to read. The first is the only one that may go on to build a
+    /// filesystem — the other two would build an empty one and label it valid.
+    private static func rejectBlobUnmatchedByDeclaration(_ reader: ArchiveReader) throws {
+        if let failure = reader.iterationFailure {
+            throw UnpackError.sourceIsNotDeclaredArchive(
+                declaration: reader.declaration, reason: failure.description)
+        }
+        guard reader.decodedByteCount > 0 else {
+            throw UnpackError.sourceIsNotDeclaredArchive(
+                declaration: reader.declaration,
+                reason: "the declared filter decoded no data at all from the source")
+        }
     }
 
     /// Core unpack logic. When `progress` is nil the handler calls are skipped.
@@ -180,6 +200,7 @@ extension EXT4.Formatter {
                 await progress([.addItems(1)])
             }
         }
+        try Self.rejectBlobUnmatchedByDeclaration(reader)
         guard hardlinks.acyclic else {
             throw UnpackError.circularLinks
         }
@@ -208,6 +229,9 @@ public enum UnpackError: Swift.Error, CustomStringConvertible, Sendable, Equatab
     case invalidName(_ name: String)
     /// A circular link is found.
     case circularLinks
+    /// The source is not the archive it was declared to be, so unpacking it
+    /// would produce an empty filesystem rather than the one it names.
+    case sourceIsNotDeclaredArchive(declaration: String, reason: String)
 
     /// The description of the error.
     public var description: String {
@@ -216,6 +240,8 @@ public enum UnpackError: Swift.Error, CustomStringConvertible, Sendable, Equatab
             return "'\(name)' is an invalid name"
         case .circularLinks:
             return "circular links found"
+        case .sourceIsNotDeclaredArchive(let declaration, let reason):
+            return "the source is not \(declaration): \(reason)"
         }
     }
 }

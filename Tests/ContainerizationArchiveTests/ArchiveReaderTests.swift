@@ -712,3 +712,184 @@ struct ArchiveReaderTests {
         #expect(testContent == "Hello from zstd compressed archive", "Content should match")
     }
 }
+
+/// `IteratorProtocol.next()` cannot throw, so an iterator that stops only on
+/// `ARCHIVE_EOF` reports "the archive ended" for every reason an archive can stop
+/// producing headers — including the two ways a blob that is not the archive its
+/// declaration claims stops producing them. These tests pin the two signals that
+/// let a consumer tell the cases apart after the loop.
+struct ArchiveReaderMistypedBlobTests {
+    private func writeTar(at url: URL, filter: Filter) throws {
+        let archiver = try ArchiveWriter(format: .paxRestricted, filter: filter, file: url)
+        let entry = WriteEntry()
+        entry.path = "/file1"
+        entry.fileType = .regular
+        entry.permissions = 0o644
+        let payload = Data("hello".utf8)
+        entry.size = numericCast(payload.count)
+        try archiver.writeEntry(entry: entry, data: payload)
+        try archiver.finishEncoding()
+    }
+
+    private func temporaryFile(named name: String) throws -> URL {
+        let dir = createTemporaryDirectory(baseName: "ArchiveReaderMistypedBlobTests")!
+        return dir.appendingPathComponent(name)
+    }
+
+    /// Gzip bytes read as if they were uncompressed: `archive_read_next_header2`
+    /// returns `ARCHIVE_FATAL` and does not advance the stream, so it returns it
+    /// again on the next call, and again. An iterator that stops only on
+    /// `ARCHIVE_EOF` therefore never stops at all.
+    ///
+    /// The loop below is bounded because of that, and a time limit would not do
+    /// instead: a synchronous loop that never suspends cannot be cancelled, so a
+    /// regression here would hang the whole run rather than fail this one test.
+    @Test func streamingIterationStopsAndRecordsAFatalReadError() throws {
+        let url = try temporaryFile(named: "gzip-declared-none.tar")
+        try writeTar(at: url, filter: .gzip)
+
+        let reader = try ArchiveReader(format: .paxRestricted, filter: .none, file: url)
+        var entries = 0
+        for _ in reader.makeStreamingIterator() {
+            entries += 1
+            if entries > 1024 {
+                break
+            }
+        }
+
+        #expect(entries == 0)
+        let failure = try #require(reader.iterationFailure)
+        #expect(failure.description.contains("Truncated tar archive"))
+    }
+
+    /// `ARCHIVE_WARN` is not a stop. libarchive uses it for problems it recovered
+    /// from and hands back a usable entry alongside it. Refusing on any result that
+    /// is not `ARCHIVE_OK` would turn every such archive into a refusal, which is
+    /// the opposite mistake to the one being fixed here and would show up on real
+    /// layers rather than on mistyped ones.
+    ///
+    /// Corrupting the decimal length that prefixes a pax extended-attribute
+    /// record is what produces one: the extended header is unreadable, the ustar
+    /// header behind it is not.
+    @Test func aWarnedButUsableHeaderIsStillAnEntry() throws {
+        let url = try temporaryFile(named: "warned.tar")
+        let archiver = try ArchiveWriter(format: .paxRestricted, filter: .none, file: url)
+        let entry = WriteEntry()
+        entry.path = "/file1"
+        entry.fileType = .regular
+        entry.permissions = 0o644
+        entry.xattrs = ["user.thing": Data([1, 2, 3])]
+        let payload = Data("hello".utf8)
+        entry.size = numericCast(payload.count)
+        try archiver.writeEntry(entry: entry, data: payload)
+        try archiver.finishEncoding()
+
+        // Block 0 is the pax extended header, block 1 its records. Byte 512 is the
+        // first digit of the first record's length.
+        var bytes = [UInt8](try Data(contentsOf: url))
+        #expect(bytes[156] == UInt8(ascii: "x"), "block 0 should be a pax extended header")
+        bytes[512] = UInt8(ascii: "9")
+        let corrupted = url.deletingLastPathComponent().appendingPathComponent("warned-corrupt.tar")
+        try Data(bytes).write(to: corrupted)
+
+        let reader = try ArchiveReader(format: .paxRestricted, filter: .none, file: corrupted)
+        var paths: [String] = []
+        for (entry, _) in reader.makeStreamingIterator() {
+            paths.append(entry.path ?? "<nil>")
+        }
+
+        #expect(paths == ["/file1"])
+        #expect(reader.iterationFailure == nil)
+    }
+
+    /// The buffering iterator has the same shape and the same hole, and it is what
+    /// `for … in reader` goes through.
+    @Test func bufferingIterationStopsAndRecordsAFatalReadError() throws {
+        let url = try temporaryFile(named: "gzip-declared-none-buffered.tar")
+        try writeTar(at: url, filter: .gzip)
+
+        let reader = try ArchiveReader(format: .paxRestricted, filter: .none, file: url)
+        var entries = 0
+        for _ in reader {
+            entries += 1
+            if entries > 1024 {
+                break
+            }
+        }
+
+        #expect(entries == 0)
+        let failure = try #require(reader.iterationFailure)
+        #expect(failure.description.contains("Truncated tar archive"))
+    }
+
+    /// Uncompressed bytes read as if they were gzip: libarchive's gzip filter
+    /// yields an empty stream rather than an error, so the tar reader sees a
+    /// zero-length archive and reports a *clean* end of file. There is no error to
+    /// record here, and that is the point — the only evidence is that nothing was
+    /// decoded.
+    @Test func decodedByteCountIsZeroWhenTheDeclaredFilterDecodesNothing() throws {
+        let url = try temporaryFile(named: "none-declared-gzip.tar")
+        try writeTar(at: url, filter: .none)
+
+        let reader = try ArchiveReader(format: .paxRestricted, filter: .gzip, file: url)
+        var entries = 0
+        for _ in reader.makeStreamingIterator() {
+            entries += 1
+        }
+
+        #expect(entries == 0)
+        #expect(reader.iterationFailure == nil, "libarchive reports no error for this blob")
+        #expect(reader.decodedByteCount == 0)
+    }
+
+    /// The same counter over an honest archive, so the check above cannot be
+    /// satisfied by a counter that is always zero.
+    @Test(arguments: [Filter.none, .gzip])
+    func decodedByteCountCountsBytesReachingTheFormatHandler(filter: Filter) throws {
+        let url = try temporaryFile(named: "honest.tar")
+        try writeTar(at: url, filter: filter)
+
+        let reader = try ArchiveReader(format: .paxRestricted, filter: filter, file: url)
+        var entries = 0
+        for _ in reader.makeStreamingIterator() {
+            entries += 1
+        }
+
+        #expect(entries == 1)
+        #expect(reader.iterationFailure == nil)
+        // Post-decompression bytes: a one-entry pax archive is 512-byte blocks
+        // plus the two-block end marker, whatever the file on disk weighs.
+        #expect(reader.decodedByteCount >= 1024)
+    }
+
+    /// `extractContents` iterates the same way and must not report success on a
+    /// blob it could not read.
+    ///
+    /// Raw bytes rather than gzip bytes, because this loop is inside
+    /// `extractContents` and cannot be bounded from here: raw bytes give a stream
+    /// that does advance and does end, so a regression fails this test instead of
+    /// hanging the run. It also means "an `ArchiveError` was thrown" is too weak
+    /// an assertion — the pre-existing `no entries found in archive` guard throws
+    /// one of those on its own — so the error has to name the read failure.
+    @Test func extractContentsRefusesABlobItCannotRead() throws {
+        let url = try temporaryFile(named: "raw-declared-none-extract.tar")
+        try Data(repeating: 0x41, count: 64 * 1024).write(to: url)
+        let extractDir = try createExtractionDirectory(name: "mistyped")
+        defer { try? FileManager.default.removeItem(at: extractDir.deletingLastPathComponent()) }
+
+        let reader = try ArchiveReader(format: .paxRestricted, filter: .none, file: url)
+        var thrown: (any Error)?
+        do {
+            _ = try reader.extractContents(to: extractDir)
+        } catch {
+            thrown = error
+        }
+        let failure = try #require(thrown as? ArchiveError)
+        #expect(failure.description.contains("Damaged tar archive"))
+    }
+
+    private func createExtractionDirectory(name: String) throws -> URL {
+        let testDirectory = createTemporaryDirectory(baseName: "ArchiveReaderMistypedBlobTests.\(name)")!
+        return testDirectory.appendingPathComponent("extract")
+    }
+}

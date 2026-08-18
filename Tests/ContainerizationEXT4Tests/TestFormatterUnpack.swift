@@ -454,6 +454,238 @@ struct UnpackProgressTest {
     }
 }
 
+/// A blob whose declared media type disagrees with its bytes must be refused, not
+/// turned into a valid, correctly labelled, empty filesystem.
+///
+/// The media types the callers of `unpack(source:format:compression:progress:)`
+/// accept map onto exactly three filters — `.none`, `.gzip` and `.zstd` (see
+/// `EXT4Unpacker.compressionFilter(for:)` and the switch in `OverlayFSUnpacker`) —
+/// so a mistyped blob reaches `unpack` as one of two disagreements, and this suite
+/// covers both:
+///
+/// - A declared filter that decodes the blob to *nothing* — plain or zstd bytes
+///   under a gzip declaration — hands the tar reader an empty stream. That is a
+///   clean `ARCHIVE_EOF` at offset zero: no entries, no `archive_errno`, no error
+///   string. Only `ArchiveReader.decodedByteCount` distinguishes it from an
+///   archive that really did end.
+/// - A declared filter that leaves the blob *undecoded* — gzip or zstd bytes under
+///   an uncompressed declaration — hands the tar reader compressed garbage. That
+///   is an `ARCHIVE_FATAL` that `archive_read_next_header2` repeats without ever
+///   advancing, so an iterator that stops only on `ARCHIVE_EOF` never stops at
+///   all. Only `ArchiveReader.iterationFailure` distinguishes it from an archive
+///   that is still going. The time limits below exist because the failure mode of
+///   a regression here is a hang, not a wrong answer.
+///
+/// A zstd declaration over non-zstd bytes is refused before any of this, by
+/// `ArchiveReader.decompressZstd`; `unpackRefusesGzipTarDeclaredZstd` pins that.
+struct MistypedBlobUnpackTest {
+    private let payload = Data("hello".utf8)
+
+    /// Writes a two-entry pax-restricted archive through `filter`.
+    private func writeLayer(at url: URL, filter: ContainerizationArchive.Filter) throws {
+        let archiver = try ArchiveWriter(
+            configuration: ArchiveWriterConfiguration(format: .paxRestricted, filter: filter))
+        try archiver.open(file: url)
+        try archiver.writeEntry(entry: WriteEntry.dir(path: "/dir1", permissions: 0o755), data: nil)
+        try archiver.writeEntry(
+            entry: WriteEntry.file(path: "/dir1/file1", permissions: 0o644, size: Int64(payload.count)),
+            data: payload)
+        try archiver.finishEncoding()
+    }
+
+    /// Unpacks `source` under the given declaration and returns the error, or nil
+    /// if the unpack was accepted.
+    private func unpackFailure(
+        source: URL,
+        declaredAs filter: ContainerizationArchive.Filter,
+        progress: ProgressHandler? = nil,
+        fsPath: FilePath
+    ) async -> (any Error)? {
+        do {
+            let formatter = try EXT4.Formatter(fsPath)
+            defer { try? formatter.close() }
+            try await formatter.unpack(
+                source: source, format: .paxRestricted, compression: filter, progress: progress)
+            return nil
+        } catch {
+            return error
+        }
+    }
+
+    /// The only tar in the tree that is genuinely zstd-compressed. It lives in the
+    /// archive test target's resources; this target has no zstd compressor, and
+    /// copying the blob would put a second copy of it in the repository.
+    private var zstdLayer: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()  // ContainerizationEXT4Tests
+            .deletingLastPathComponent()  // Tests
+            .appendingPathComponent("ContainerizationArchiveTests/Resources/test.tar.zst")
+    }
+
+    // MARK: - The declared filter decodes the blob to nothing
+
+    @Test func unpackRefusesPlainTarDeclaredGzip() async throws {
+        let tempDir = FileManager.default.uniqueTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let blob = tempDir.appendingPathComponent("layer.tar", isDirectory: false)
+        let fsPath = FilePath(tempDir.appendingPathComponent("layer.ext4.img", isDirectory: false))
+        try writeLayer(at: blob, filter: .none)
+
+        let error = try #require(
+            await unpackFailure(source: blob, declaredAs: .gzip, fsPath: fsPath),
+            "unpack accepted an uncompressed tar declared as gzip")
+        let unpackError = try #require(error as? UnpackError)
+        #expect(unpackError.description.contains("gzip"))
+        #expect(unpackError.description.contains("paxRestricted"))
+    }
+
+    /// The exact shape `OCILayoutFixture` measured: a layer blob of raw bytes
+    /// carrying `application/vnd.oci.image.layer.v1.tar+gzip`.
+    @Test func unpackRefusesRawBytesDeclaredGzip() async throws {
+        let tempDir = FileManager.default.uniqueTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let blob = tempDir.appendingPathComponent("layer.tar.gz", isDirectory: false)
+        let fsPath = FilePath(tempDir.appendingPathComponent("layer.ext4.img", isDirectory: false))
+        try Data(repeating: 0x41, count: 64 * 1024).write(to: blob)
+
+        let error = try #require(
+            await unpackFailure(source: blob, declaredAs: .gzip, fsPath: fsPath),
+            "unpack accepted raw bytes declared as gzip")
+        #expect(error is UnpackError)
+    }
+
+    /// The header-scanning pass runs first when a progress handler is supplied and
+    /// iterates the blob on its own, so it has to refuse the blob too.
+    @Test func unpackWithProgressRefusesPlainTarDeclaredGzip() async throws {
+        let tempDir = FileManager.default.uniqueTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let blob = tempDir.appendingPathComponent("layer.tar", isDirectory: false)
+        let fsPath = FilePath(tempDir.appendingPathComponent("layer.ext4.img", isDirectory: false))
+        try writeLayer(at: blob, filter: .none)
+
+        let collector = ProgressCollector()
+        let error = try #require(
+            await unpackFailure(
+                source: blob, declaredAs: .gzip, progress: { await collector.append($0) }, fsPath: fsPath),
+            "unpack with progress accepted an uncompressed tar declared as gzip")
+        #expect(error is UnpackError)
+    }
+
+    // MARK: - The declared filter leaves the blob undecoded
+
+    @Test(.timeLimit(.minutes(1)))
+    func unpackRefusesGzipTarDeclaredUncompressed() async throws {
+        let tempDir = FileManager.default.uniqueTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let blob = tempDir.appendingPathComponent("layer.tar.gz", isDirectory: false)
+        let fsPath = FilePath(tempDir.appendingPathComponent("layer.ext4.img", isDirectory: false))
+        try writeLayer(at: blob, filter: .gzip)
+
+        let error = try #require(
+            await unpackFailure(source: blob, declaredAs: .none, fsPath: fsPath),
+            "unpack accepted a gzip tar declared as uncompressed")
+        let unpackError = try #require(error as? UnpackError)
+        #expect(unpackError.description.contains("none"))
+        #expect(unpackError.description.contains("paxRestricted"))
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func unpackRefusesZstdTarDeclaredUncompressed() async throws {
+        let tempDir = FileManager.default.uniqueTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let fsPath = FilePath(tempDir.appendingPathComponent("layer.ext4.img", isDirectory: false))
+
+        let error = try #require(
+            await unpackFailure(source: zstdLayer, declaredAs: .none, fsPath: fsPath),
+            "unpack accepted a zstd tar declared as uncompressed")
+        #expect(error is UnpackError)
+    }
+
+    /// Raw bytes under an uncompressed declaration reach the tar reader as a run of
+    /// unrecognisable 512-byte blocks. Unlike the gzip case the stream does advance
+    /// and does reach a real end of file, so the byte counter cannot see anything
+    /// wrong — the refusal has to come from the per-header result code.
+    @Test(.timeLimit(.minutes(1)))
+    func unpackRefusesRawBytesDeclaredUncompressed() async throws {
+        let tempDir = FileManager.default.uniqueTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let blob = tempDir.appendingPathComponent("layer.tar", isDirectory: false)
+        let fsPath = FilePath(tempDir.appendingPathComponent("layer.ext4.img", isDirectory: false))
+        try Data(repeating: 0x41, count: 64 * 1024).write(to: blob)
+
+        let error = try #require(
+            await unpackFailure(source: blob, declaredAs: .none, fsPath: fsPath),
+            "unpack accepted raw bytes declared as uncompressed")
+        #expect(error is UnpackError)
+    }
+
+    // MARK: - The declared filter is zstd
+
+    @Test func unpackRefusesGzipTarDeclaredZstd() async throws {
+        let tempDir = FileManager.default.uniqueTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let blob = tempDir.appendingPathComponent("layer.tar.gz", isDirectory: false)
+        let fsPath = FilePath(tempDir.appendingPathComponent("layer.ext4.img", isDirectory: false))
+        try writeLayer(at: blob, filter: .gzip)
+
+        _ = try #require(
+            await unpackFailure(source: blob, declaredAs: .zstd, fsPath: fsPath),
+            "unpack accepted a gzip tar declared as zstd")
+    }
+
+    // MARK: - Every media type the formatter supports still unpacks
+
+    @Test(arguments: [ContainerizationArchive.Filter.none, .gzip])
+    func unpackAcceptsHonestArchive(filter: ContainerizationArchive.Filter) async throws {
+        let tempDir = FileManager.default.uniqueTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let blob = tempDir.appendingPathComponent("layer.tar", isDirectory: false)
+        let fsPath = FilePath(tempDir.appendingPathComponent("layer.ext4.img", isDirectory: false))
+        try writeLayer(at: blob, filter: filter)
+
+        let formatter = try EXT4.Formatter(fsPath)
+        try await formatter.unpack(source: blob, format: .paxRestricted, compression: filter)
+        try formatter.close()
+
+        let reader = try EXT4.EXT4Reader(blockDevice: fsPath)
+        #expect(try reader.stat("/dir1").inode.mode.isDir())
+        #expect(try reader.readFile(at: "/dir1/file1") == payload)
+    }
+
+    @Test func unpackAcceptsHonestZstdArchive() async throws {
+        let tempDir = FileManager.default.uniqueTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let fsPath = FilePath(tempDir.appendingPathComponent("layer.ext4.img", isDirectory: false))
+
+        let formatter = try EXT4.Formatter(fsPath)
+        try await formatter.unpack(source: zstdLayer, format: .paxRestricted, compression: .zstd)
+        try formatter.close()
+
+        let reader = try EXT4.EXT4Reader(blockDevice: fsPath)
+        #expect(try reader.readFile(at: "/test.txt") == Data("Hello from zstd compressed archive".utf8))
+    }
+
+    /// The progress pre-pass must not refuse what the unpack pass accepts.
+    @Test func unpackWithProgressAcceptsHonestArchive() async throws {
+        let tempDir = FileManager.default.uniqueTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let blob = tempDir.appendingPathComponent("layer.tar.gz", isDirectory: false)
+        let fsPath = FilePath(tempDir.appendingPathComponent("layer.ext4.img", isDirectory: false))
+        try writeLayer(at: blob, filter: .gzip)
+
+        let collector = ProgressCollector()
+        let formatter = try EXT4.Formatter(fsPath)
+        try await formatter.unpack(
+            source: blob, format: .paxRestricted, compression: .gzip,
+            progress: { await collector.append($0) })
+        try formatter.close()
+
+        let reader = try EXT4.EXT4Reader(blockDevice: fsPath)
+        #expect(try reader.readFile(at: "/dir1/file1") == payload)
+        #expect(!(await collector.allEvents().isEmpty))
+    }
+}
+
 extension ContainerizationArchive.WriteEntry {
     static func dir(path: String, permissions: UInt16) -> WriteEntry {
         let entry = WriteEntry()

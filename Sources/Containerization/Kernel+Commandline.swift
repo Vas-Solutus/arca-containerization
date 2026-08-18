@@ -21,11 +21,27 @@ extension Kernel {
     ///
     /// ARCA PATCH: `attachedOverlayLayers` is how many OverlayFS layer block devices this VM
     /// is being given, reported to vminitd as an init argument. It has NO default value on
-    /// purpose. This function is the single point both backends build a command line through
-    /// (`VZVirtualMachineInstance.toVZ`, `CHVirtualMachineInstance.buildVmConfig`), so a
-    /// required parameter is what makes "one backend reports and the other does not" fail to
-    /// compile rather than fail in a guest. `nil` means this VM has no Arca overlay at all --
-    /// upstream's own rootfs-in-a-single-image boot -- and is not the same claim as `0`.
+    /// purpose: this function is the single point both backends build a command line through
+    /// (`VZVirtualMachineInstance.toVZ`, `CHVirtualMachineInstance.buildVmConfig`), and a
+    /// required parameter makes a **call site** that omits the value fail to compile.
+    ///
+    /// **That is all it secures, and the difference matters.** The value reaches those two call
+    /// sites through three plain assignments -- `LinuxContainer.create` into `VMConfiguration`,
+    /// and each manager's `create` into its instance configuration. Dropping one produces
+    /// exactly the "one backend reports and the other does not" this parameter cannot prevent,
+    /// and it is invisible: MEASURED with the `LinuxContainer.create` assignment deleted, the
+    /// submodule reports `613 tests passed` and Arca reports `Executed 247 tests, with 0
+    /// failures`. The guest would then be told nothing, resolve `.unreported`, and refuse every
+    /// boot on that backend, with the only trace a line in `bootlog.log`. Those three lines are
+    /// load bearing and pinned by nothing, and the hop
+    /// from an instance configuration to this command line cannot be driven from a macOS test
+    /// because `toVZ` ends in `VZVirtualMachineConfiguration.validate()`, which needs the
+    /// virtualization entitlement (MEASURED: a bare `VZVirtualMachineConfiguration` carrying
+    /// only a `VZLinuxBootLoader` throws `VZErrorDomain Code=2 ... doesn't have the
+    /// "com.apple.security.virtualization" entitlement` from `validate()` alone).
+    ///
+    /// `nil` means this VM has no Arca overlay at all -- upstream's own
+    /// rootfs-in-a-single-image boot -- and is not the same claim as `0`.
     /// See `ArcaLayerAttachment`.
     func linuxCommandline(initialFilesystem: Mount, attachedOverlayLayers: Int?) -> String {
         var args = self.commandLine.kernelArgs

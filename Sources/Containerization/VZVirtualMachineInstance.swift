@@ -424,11 +424,17 @@ extension VZVirtualMachineInstance.Configuration {
     ///
     /// **`attachedOverlayLayers` is read from `self` and is deliberately not a parameter.**
     /// That is the point of the extraction rather than an accident of it: `toVZ` now has no
-    /// count to pass, so it cannot pass the wrong one, and reporting a number that disagrees
-    /// with the devices attached stops being a thing a caller can do. `kernel` and
-    /// `initialFilesystem` ARE parameters, so that `toVZ`'s two `guard`s stay exactly where and
-    /// in the order they were -- moving them here would either duplicate the second one or
-    /// swap which of the two errors a configuration missing both reports.
+    /// count to pass and therefore cannot pass a wrong one.
+    ///
+    /// **That closes one call boundary, not the whole story.** The number read here was decided
+    /// three hops upstream in Arca's `OverlayFSMounter` and crosses three unpinned assignments
+    /// on the way to `self.attachedOverlayLayers`. A count that disagrees with the devices
+    /// actually attached still arrives here and is still reported faithfully; what can no
+    /// longer happen is this method being handed a count other than the configuration's own.
+    ///
+    /// `kernel` and `initialFilesystem` ARE parameters, so that `toVZ`'s two `guard`s stay
+    /// exactly where and in the order they were -- moving them here would either duplicate the
+    /// second one or swap which of the two errors a configuration missing both reports.
     func linuxBootLoader(kernel: Kernel, initialFilesystem: Mount) -> VZLinuxBootLoader {
         let loader = VZLinuxBootLoader(kernelURL: kernel.path)
         loader.commandLine = kernel.linuxCommandline(

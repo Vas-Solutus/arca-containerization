@@ -29,13 +29,18 @@ extension Kernel {
     /// sites through three plain assignments -- `LinuxContainer.create` into `VMConfiguration`,
     /// and each manager's `create` into its instance configuration. Dropping one produces
     /// exactly the "one backend reports and the other does not" this parameter cannot prevent,
-    /// and it is invisible: MEASURED with the `LinuxContainer.create` assignment deleted, the
-    /// submodule reports `613 tests passed` and Arca reports `Executed 247 tests, with 0
+    /// and it is invisible: MEASURED at submodule `cc2ea7d` / Arca `a3e812d` with the
+    /// `LinuxContainer.create` assignment deleted, the submodule reported `613 tests passed`
+    /// -- its whole count at that commit -- and Arca reported `Executed 247 tests, with 0
     /// failures`. The guest would then be told nothing, resolve `.unreported`, and refuse every
     /// boot on that backend, with the only trace a line in `bootlog.log`. Those three lines are
-    /// load bearing and pinned by nothing, and the hop
-    /// from an instance configuration to this command line cannot be driven from a macOS test
-    /// because `toVZ` ends in `VZVirtualMachineConfiguration.validate()`, which needs the
+    /// load bearing and pinned by nothing.
+    ///
+    /// The hop after them -- an instance configuration to this command line -- **is** pinned,
+    /// by `VZAttachedLayerReportTests` driving
+    /// `VZVirtualMachineInstance.Configuration.linuxBootLoader(kernel:initialFilesystem:)`,
+    /// which was extracted for that purpose. What is still unreachable from a test is `toVZ`
+    /// itself, which ends in `VZVirtualMachineConfiguration.validate()`, which needs the
     /// virtualization entitlement (MEASURED: a bare `VZVirtualMachineConfiguration` carrying
     /// only a `VZLinuxBootLoader` throws `VZErrorDomain Code=2 ... doesn't have the
     /// "com.apple.security.virtualization" entitlement` from `validate()` alone).

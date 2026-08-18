@@ -25,17 +25,26 @@ import Virtualization
 /// `validate()` alone, while reading `commandLine` back off the loader needs nothing. The
 /// boot-loader construction was extracted for exactly that reason.
 ///
-/// **What that extraction makes true is stronger than what these tests assert.**
-/// `linuxBootLoader` reads `attachedOverlayLayers` from the configuration, so `toVZ` has no
-/// count to pass and no way to pass a wrong one. The failure mode "the backend reports a number
-/// that disagrees with the devices it attached" is gone by construction rather than watched for.
-/// These tests pin the remaining thing a change could still get wrong: that the number on the
-/// configuration is the number on the command line.
+/// **What that extraction makes true, stated no wider than it is.** `linuxBootLoader` reads
+/// `attachedOverlayLayers` from the configuration, so `toVZ` has no count to pass and no way to
+/// pass a wrong one. That is a **call-boundary** guarantee: this backend cannot report a number
+/// other than the configuration's own. It is NOT a guarantee that the number matches the devices
+/// attached -- that is decided three hops upstream in Arca's `OverlayFSMounter` and crosses
+/// three unpinned assignments to reach here, and a wrong number arriving here is reported
+/// faithfully. These tests pin the remaining thing a change could get wrong on this side: that
+/// the number on the configuration is the number on the command line.
+///
+/// **One line of `toVZ` is pinned by nothing, and it is worth naming.**
+/// `config.bootLoader = self.linuxBootLoader(...)` is the only part of the old code these tests
+/// do not cover. Deleting it would leave a configuration with no boot loader, which `validate()`
+/// would reject -- but `validate()` cannot run under test, and `toVZ` has exactly one caller,
+/// the `VZVirtualMachineInstance` initialiser, which no test constructs. The extraction traded
+/// four unpinned lines for one.
 ///
 /// The two hops on either side remain unpinned and are not reachable from here:
-/// `VZVirtualMachineManager.create` assigns the field inside the closure it hands to the
-/// `VZVirtualMachineInstance` initialiser, which builds a real machine, and `LinuxContainer`
-/// would need a fake `VirtualMachineManager` that this package does not have.
+/// `VZVirtualMachineManager.create` assigns the field inside the closure it hands to that same
+/// initialiser, which builds a real machine, and `LinuxContainer` would need a fake
+/// `VirtualMachineManager` that this package does not have.
 struct VZAttachedLayerReportTests {
     /// A configuration whose only interesting property is the reported count.
     private func configuration(attachedOverlayLayers: Int?) -> VZVirtualMachineInstance.Configuration {

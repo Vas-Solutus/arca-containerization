@@ -68,9 +68,6 @@ extension EXT4 {
         ///   - minDiskSize: The minimum usable capacity for the filesystem. When a journal is
         ///     configured, the actual image size will be larger than this value by the journal size.
         ///   - journal: The JBD2 journal size and mode, or nil for an unjournalled filesystem.
-        ///   - volumeLabel: ARCA PATCH. The `s_volume_name` written into the superblock, or nil to
-        ///     leave the field zeroed as upstream does. At most `EXT4.VolumeLabelLength` bytes;
-        ///     longer throws rather than truncating. See `EXT4+VolumeLabel.swift`.
         ///
         /// - Note: This ext4 formatter is designed for creating block devices out of container images and does not support all the
         ///         features and options available in the full ext4 filesystem implementation. It focuses
@@ -78,13 +75,7 @@ extension EXT4 {
         ///
         /// - Important: Ensure that the destination block device is accessible and has sufficient permissions
         ///              for formatting. The formatting process will erase all existing data on the device.
-        public init(
-            _ devicePath: FilePath,
-            blockSize: UInt32 = 4096,
-            minDiskSize: UInt64 = 256.kib(),
-            journal: JournalConfig? = nil,
-            volumeLabel: String? = nil
-        ) throws {
+        public init(_ devicePath: FilePath, blockSize: UInt32 = 4096, minDiskSize: UInt64 = 256.kib(), journal: JournalConfig? = nil) throws {
             /// The constructor performs the following steps:
             ///
             /// 1. Creates the first 10 inodes:
@@ -108,13 +99,6 @@ extension EXT4 {
             guard minDiskSize / UInt64(blockSize) <= UInt64(UInt32.max) else {
                 throw Error.cannotResizeFS(minDiskSize)
             }
-            // ARCA PATCH: reject an unwritable label here rather than at close(), so a caller
-            // never gets a formatted image whose identity is missing.
-            if let volumeLabel {
-                var probe = SuperBlock()
-                try probe.setVolumeLabel(volumeLabel)
-            }
-            self.volumeLabel = volumeLabel
             self.logBlockSize = UInt32(blockSize.trailingZeroBitCount) - 10
             if !FileManager.default.fileExists(atPath: devicePath.description) {
                 _ = FileManager.default.createFile(atPath: devicePath.description, contents: nil)
@@ -965,12 +949,6 @@ extension EXT4 {
             }
             superblock.featureCompat = compatFeatures
 
-            // ARCA PATCH: s_volume_name carries the device's identity into the guest, which
-            // has no other way to tell a layer image from a named volume. Validated in init.
-            if let volumeLabel = self.volumeLabel {
-                try superblock.setVolumeLabel(volumeLabel)
-            }
-
             // Fields intentionally left at zero:
             // s_r_blocks_count_lo: no blocks reserved for root
             // s_mtime / s_wtime: never mounted/written; kernel updates on first access
@@ -978,6 +956,7 @@ extension EXT4 {
             // s_lastcheck / s_checkinterval: no time-based fsck scheduling
             // s_def_resuid / s_def_resgid: reserved blocks owned by uid/gid 0 (root)
             // s_block_group_nr: this superblock resides in group 0
+            // s_volume_name: no volume label
             // s_last_mounted: no recorded prior mount path
             // s_algorithm_usage_bitmap: obsolete compression field, not used
             // s_prealloc_blocks / s_prealloc_dir_blocks: block preallocation not enabled
@@ -1011,11 +990,6 @@ extension EXT4 {
         var handle: FileHandle
         var inodes: [Ptr<Inode>]
         let journalConfig: JournalConfig?
-
-        // ARCA PATCH: written into s_volume_name when the superblock is committed.
-        // Validated in init so an over-long label fails before the image is written, not
-        // after.
-        let volumeLabel: String?
 
         var pos: UInt64 {
             guard let offset = try? self.handle.offset() else {

@@ -50,10 +50,19 @@ extension EXT4 {
                 throw Error.notFound(blockDevice.description)
             }
             self.handle = fileHandle
-            // ARCA PATCH: the read moved to EXT4.SuperBlock.read(from:at:) so that the
-            // superblock-only reader below cannot drift from this one. The handle is left
-            // positioned exactly where the inlined version left it.
-            self._superBlock = try EXT4.SuperBlock.read(from: self.handle, at: blockDevice.description)
+            try handle.seek(toOffset: EXT4.SuperBlockOffset)
+
+            let superBlockSize = MemoryLayout<EXT4.SuperBlock>.size
+            guard let data = try? self.handle.read(upToCount: superBlockSize) else {
+                throw EXT4.Error.couldNotReadSuperBlock(blockDevice.description, EXT4.SuperBlockOffset, superBlockSize)
+            }
+            let sb = data.withUnsafeBytes { ptr in
+                ptr.loadLittleEndian(as: EXT4.SuperBlock.self)
+            }
+            guard sb.magic == EXT4.SuperBlockMagic else {
+                throw EXT4.Error.invalidSuperBlock
+            }
+            self._superBlock = sb
             var items: [(item: Ptr<EXT4.FileTree.FileTreeNode>, inode: InodeNumber)] = [
                 (self.tree.root, EXT4.RootInode)
             ]

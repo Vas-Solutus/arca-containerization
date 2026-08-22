@@ -656,63 +656,6 @@ extension Initd: Com_Apple_Containerization_Sandbox_V3_SandboxContext.SimpleServ
             ])
 
         do {
-            // ARCA PATCH: skip block device mounts — they are already mounted during boot.
-            // ArcaBoot.prepareOverlayFS mounts /dev/vdb (writable) at /mnt/writable and
-            // /dev/vdc+ (layers) at /mnt/layer{N}. The OCI runtime must not mount them again.
-            if request.source.hasPrefix("/dev/vd") && request.source != "/dev" {
-                log.info(
-                    "Skipping block device mount (already mounted during boot)",
-                    metadata: [
-                        "source": "\(request.source)",
-                        "destination": "\(request.destination)",
-                    ])
-                return .init()
-            }
-
-            // ARCA PATCH: detect the rootfs mount request (a bind from / to
-            // /run/container/{id}/rootfs) and mount OverlayFS directly at that path rather
-            // than bind mounting. Mounting the overlay at / during boot instead would make
-            // the rootfs read-only; see ArcaBoot.
-            if request.type == "none" && request.options.contains("bind") && request.source == "/"
-                && request.destination.contains("/rootfs")
-            {
-                log.info(
-                    "Mounting OverlayFS at rootfs path",
-                    metadata: [
-                        "destination": "\(request.destination)"
-                    ])
-
-                guard let opts = await OverlayFSConfig.shared.mountOptions else {
-                    log.error("OverlayFS mount options not available")
-                    // grpc-swift v2 (GRPCCore) replaced GRPCStatus with RPCError upstream.
-                    throw RPCError(code: .internalError, message: "OverlayFS mount options not available")
-                }
-
-                try FileManager.default.createDirectory(
-                    atPath: request.destination,
-                    withIntermediateDirectories: true
-                )
-
-                guard Musl.mount("overlay", request.destination, "overlay", 0, opts) == 0 else {
-                    log.error(
-                        "Failed to mount OverlayFS",
-                        metadata: [
-                            "destination": "\(request.destination)",
-                            "errno": "\(errno)",
-                        ])
-                    throw RPCError(code: .internalError, message: "failed to mount OverlayFS: errno \(errno)")
-                }
-
-                log.info(
-                    "OverlayFS mounted at rootfs",
-                    metadata: [
-                        "destination": "\(request.destination)"
-                    ])
-
-                return .init()
-            }
-
-            // Other mounts (proc, sys, tmpfs, ...) use the existing logic.
             let mnt = ContainerizationOS.Mount(
                 type: request.type,
                 source: request.source,

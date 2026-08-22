@@ -85,9 +85,6 @@ public final class VZVirtualMachineInstance: Sendable {
         public var bootLog: BootLog?
         /// Extension objects that participate in the VM instance lifecycle.
         public var extensions: [any Sendable] = []
-        /// ARCA PATCH: how many OverlayFS layer block devices this VM is being given.
-        /// See ``ArcaLayerAttachment``.
-        public var attachedOverlayLayers: Int?
 
         public init() {
             self.cpus = 4
@@ -413,37 +410,6 @@ extension VZVirtualMachineInstance.Configuration {
         return [c]
     }
 
-    /// ARCA PATCH: the boot loader this configuration boots with, built apart from `toVZ`.
-    ///
-    /// **Extracted so the layer count's last host-side hop can be tested at all.** `toVZ` ends
-    /// in `VZVirtualMachineConfiguration.validate()`, which needs the virtualization
-    /// entitlement even when no virtual machine is built (MEASURED: a bare configuration
-    /// carrying only a `VZLinuxBootLoader` throws `VZErrorDomain Code=2 ... doesn't have the
-    /// "com.apple.security.virtualization" entitlement` from `validate()` alone), so no unit
-    /// test can reach `toVZ`'s return value. This can be called directly.
-    ///
-    /// **`attachedOverlayLayers` is read from `self` and is deliberately not a parameter.**
-    /// That is the point of the extraction rather than an accident of it: `toVZ` now has no
-    /// count to pass and therefore cannot pass a wrong one.
-    ///
-    /// **That closes one call boundary, not the whole story.** The number read here was decided
-    /// three hops upstream in Arca's `OverlayFSMounter` and crosses three unpinned assignments
-    /// on the way to `self.attachedOverlayLayers`. A count that disagrees with the devices
-    /// actually attached still arrives here and is still reported faithfully; what can no
-    /// longer happen is this method being handed a count other than the configuration's own.
-    ///
-    /// `kernel` and `initialFilesystem` ARE parameters, so that `toVZ`'s two `guard`s stay
-    /// exactly where and in the order they were -- moving them here would either duplicate the
-    /// second one or swap which of the two errors a configuration missing both reports.
-    func linuxBootLoader(kernel: Kernel, initialFilesystem: Mount) -> VZLinuxBootLoader {
-        let loader = VZLinuxBootLoader(kernelURL: kernel.path)
-        loader.commandLine = kernel.linuxCommandline(
-            initialFilesystem: initialFilesystem,
-            attachedOverlayLayers: self.attachedOverlayLayers
-        )
-        return loader
-    }
-
     func toVZ(allocator: any AddressAllocator<Character>) throws -> VZVirtualMachineConfiguration {
         var config = VZVirtualMachineConfiguration()
 
@@ -503,7 +469,9 @@ extension VZVirtualMachineInstance.Configuration {
             throw ContainerizationError(.invalidArgument, message: "rootfs cannot be nil")
         }
 
-        config.bootLoader = self.linuxBootLoader(kernel: kernel, initialFilesystem: initialFilesystem)
+        let loader = VZLinuxBootLoader(kernelURL: kernel.path)
+        loader.commandLine = kernel.linuxCommandline(initialFilesystem: initialFilesystem)
+        config.bootLoader = loader
 
         try initialFilesystem.configure(config: &config)
 

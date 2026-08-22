@@ -146,9 +146,9 @@ public struct EXT4Unpacker: Unpacker {
             do {
                 try await filesystem.unpack(reader: reader, progress: progress)
             } catch {
-                // ARCA PATCH: see `LayerUnpackFailure`. Unlike `OverlayFSUnpacker`, this
-                // unpacker stacks every layer into ONE filesystem, so the destination alone
-                // cannot say which layer refused -- it is the same path for all of them.
+                // ARCA PATCH: see `LayerUnpackFailure`. This unpacker stacks every layer into
+                // ONE filesystem, so the destination alone cannot say which layer refused --
+                // it is the same path for all of them.
                 throw LayerUnpackFailure.naming(
                     layer: index,
                     of: resolvedLayers.count,

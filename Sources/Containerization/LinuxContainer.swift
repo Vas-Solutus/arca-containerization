@@ -106,15 +106,6 @@ public final class LinuxContainer: Container, Sendable {
         /// on top of the container's configured `memoryInBytes` value.
         /// The total is aligned to a 1 MiB boundary.
         public var memoryOverhead: UInt64 = 128.mib()
-        /// ARCA PATCH: how many of `mounts` are OverlayFS layer block devices, as the caller
-        /// that attached them counted them. Reported to the guest on the kernel command line
-        /// so it can tell an image with no layers from layers it failed to identify.
-        ///
-        /// This is the attacher's INTENT and must stay so. Recomputing it here from the mounts
-        /// -- by their role labels, their options, or their position -- would agree with the
-        /// guest's own classification precisely when that classification is wrong, which is
-        /// the one case worth catching. See ``ArcaLayerAttachment``.
-        public var attachedOverlayLayers: Int?
 
         public init() {}
 
@@ -660,8 +651,7 @@ extension LinuxContainer {
                 interfaces: self.interfaces,
                 mountsByID: [self.id: containerMounts],
                 bootLog: self.config.bootLog,
-                nestedVirtualization: self.config.virtualization,
-                attachedOverlayLayers: self.config.attachedOverlayLayers
+                nestedVirtualization: self.config.virtualization
             )
             let creationConfig = StandardVMConfig(configuration: vmConfig)
             let vm = try await self.vmm.create(config: creationConfig)
@@ -793,7 +783,6 @@ extension LinuxContainer {
                 // We don't need the rootfs (or writable layer), nor do OCI runtimes want it included.
                 // Also filter out file mount holding directories. We'll mount those separately under /run.
                 // Transform virtiofs mounts to bind mounts from /run/virtiofs/{tag}
-                // ARCA: the OverlayFS block device mounts are also filtered out.
                 let containerMounts = createdState.vm.mounts[self.id] ?? []
                 let holdingTags = createdState.fileMountContext.holdingDirectoryTags
                 // Drop rootfs, and writable layer if present.
@@ -801,44 +790,6 @@ extension LinuxContainer {
                 var mounts: [ContainerizationOCI.Mount] =
                     containerMounts.dropFirst(mountsToSkip)
                     .filter { !holdingTags.contains($0.source) }
-                    // ARCA PATCH: skip the OverlayFS block devices -- and only those. They are
-                    // attached with an empty destination precisely so that nothing here mounts
-                    // them; vminitd mounts them at boot (ArcaBoot.prepareOverlayFS) and OCI
-                    // runtimes must not see them.
-                    //
-                    // The empty destination is the marker because it is the host's own
-                    // statement of intent (OverlayFSMounter.buildMounts, "Empty to prevent
-                    // auto-mount by framework"), and it is the one thing that distinguishes
-                    // them here: by this point every block mount's source has been rewritten
-                    // to a /dev/vdX the allocator chose, so the source says nothing about what
-                    // the device is. This filter used to drop every /dev/vd source, which took
-                    // named-volume block devices with it and was why no named volume was ever
-                    // mounted at its destination.
-                    //
-                    // **The source is not consulted, and the line used to say so while still
-                    // testing it.** It read
-                    // `!($0.source.hasPrefix("/dev/vd") && $0.destination.isEmpty)`, whose two
-                    // terms select the same set today only because both producers of an empty
-                    // destination happen to be block mounts. Deleting the first term changed
-                    // nothing, which makes it a guard no test can measure, and it was a latent
-                    // divergence besides: the day anything else marks a mount
-                    // don't-auto-mount, it would reach the OCI spec carrying an empty
-                    // destination -- which is not a mount any runtime can honour anyway.
-                    //
-                    // **What it would cost is a diagnostic, and that is worth saying out
-                    // loud rather than leaving implied.** Reaching the spec, such a mount
-                    // fails in the runtime with a message naming it; dropped here it is
-                    // simply absent, which is this milestone's signature failure mode. The
-                    // log line below is what keeps it from vanishing silently.
-                    .filter { attached in
-                        if attached.destination.isEmpty && !attached.source.hasPrefix("/dev/vd") {
-                            self.logger?.warning(
-                                "dropping a mount with no destination",
-                                metadata: ["source": "\(attached.source)", "type": "\(attached.type)"]
-                            )
-                        }
-                        return !attached.destination.isEmpty
-                    }
                     .map { attached -> ContainerizationOCI.Mount in
                         if attached.type == "virtiofs" {
                             // Transform to bind mount from holding directory

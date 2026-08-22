@@ -326,8 +326,6 @@ extension EXT4 {
         case invalidPathEncoding(_ path: String)
         case couldNotReadInode(_ inode: UInt32)
         case couldNotReadGroup(_ group: UInt32)
-        // ARCA PATCH: see EXT4+VolumeLabel.swift.
-        case volumeLabelTooLong(_ label: String, _ bytes: Int)
         public var description: String {
             switch self {
             case .notFound(let path):
@@ -350,9 +348,6 @@ extension EXT4 {
                 return "could not read inode \(inode)"
             case .couldNotReadGroup(let group):
                 return "could not read group descriptor \(group)"
-            case .volumeLabelTooLong(let label, let bytes):
-                return
-                    "volume label '\(label)' is \(bytes) bytes; s_volume_name holds at most \(EXT4.VolumeLabelLength)"
             }
         }
     }

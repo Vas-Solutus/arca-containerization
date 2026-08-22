@@ -3,8 +3,10 @@
 //
 // Upstream leaves the field zeroed and offers no way to set or inspect it. Arca needs it
 // because the guest has to tell one virtio-blk device from another, and the only thing that
-// travels with a block image is the image itself. The label is the identity; see
-// `ArcaBlockDeviceRole` in the Containerization module for the vocabulary written into it.
+// travels with a block image is the image itself. The label is the identity. The role
+// vocabulary that used to be written into it was removed with this fork's revert to an
+// upstream single composed rootfs; what stays here is the encoding, which is format-level
+// and names no vocabulary of its own.
 //
 // This file owns the 16-byte encoding so that the formatter and the reader cannot disagree
 // about it.

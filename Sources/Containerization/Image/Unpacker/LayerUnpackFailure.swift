@@ -3,14 +3,15 @@
 //
 // `EXT4.Formatter.unpack` throws `UnpackError.sourceIsNotDeclaredArchive` naming the
 // DECLARATION it refused against -- "a paxRestricted archive with filter none" -- and nothing
-// that identifies the blob that carried it. An image has many layers, both unpackers in this
-// directory walk them, and `OverlayFSUnpacker` walks them CONCURRENTLY, so neither the throw
-// nor the surrounding log order says which one it was. The operator's next question is always
+// that identifies the blob that carried it. An image has many layers and `EXT4Unpacker` walks
+// all of them into one filesystem, so neither the throw nor the destination it refused against
+// says which one it was. The operator's next question is always
 // which layer, and their remedy -- refetch that blob, rebuild that layout -- needs the digest
 // to act on. The media type is the other half: it says whether the blob or the declaration is
 // the wrong one.
 //
-// One spelling for both unpackers, so the two cannot drift into naming the layer differently.
+// The spelling lives here rather than inline at the throw, so that a second unpacker cannot
+// drift into naming the layer differently.
 //===----------------------------------------------------------------------===//
 
 import ContainerizationError

@@ -459,7 +459,7 @@ struct UnpackProgressTest {
 ///
 /// The media types the callers of `unpack(source:format:compression:progress:)`
 /// accept map onto exactly three filters — `.none`, `.gzip` and `.zstd` (see
-/// `EXT4Unpacker.compressionFilter(for:)` and the switch in `OverlayFSUnpacker`) —
+/// `EXT4Unpacker.compressionFilter(for:)`) —
 /// so a mistyped blob reaches `unpack` as one of two disagreements, and this suite
 /// covers both:
 ///

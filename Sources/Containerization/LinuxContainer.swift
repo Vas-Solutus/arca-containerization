@@ -793,11 +793,18 @@ extension LinuxContainer {
                     .filter { !holdingTags.contains($0.source) }
                     // ARCA PATCH: skip the OverlayFS block devices -- and only those. They are
                     // attached with an empty destination precisely so that nothing here mounts
-                    // them; vminitd mounts them at boot (ArcaBoot.prepareOverlayFS) and OCI
-                    // runtimes must not see them.
+                    // them, and OCI runtimes must not see them.
+                    //
+                    // **Nothing mounts them inside the guest any more.** The guest-side overlay
+                    // composition was deleted along with this fork's per-layer rootfs, so a
+                    // device attached this way is now attached and then dropped right here. The
+                    // producer outlived the consumer: `OverlayFSMounter.buildMounts` in the
+                    // parent repository's `ContainerBridge` module still emits these, which is
+                    // what keeps this filter live rather than inert. It comes out when that
+                    // producer does, and not before.
                     //
                     // The empty destination is the marker because it is the host's own
-                    // statement of intent (OverlayFSMounter.buildMounts, "Empty to prevent
+                    // statement of intent (that same `buildMounts`, "Empty to prevent
                     // auto-mount by framework"), and it is the one thing that distinguishes
                     // them here: by this point every block mount's source has been rewritten
                     // to a /dev/vdX the allocator chose, so the source says nothing about what

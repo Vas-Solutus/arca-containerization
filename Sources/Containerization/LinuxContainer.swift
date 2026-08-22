@@ -783,7 +783,6 @@ extension LinuxContainer {
                 // We don't need the rootfs (or writable layer), nor do OCI runtimes want it included.
                 // Also filter out file mount holding directories. We'll mount those separately under /run.
                 // Transform virtiofs mounts to bind mounts from /run/virtiofs/{tag}
-                // ARCA: the OverlayFS block device mounts are also filtered out.
                 let containerMounts = createdState.vm.mounts[self.id] ?? []
                 let holdingTags = createdState.fileMountContext.holdingDirectoryTags
                 // Drop rootfs, and writable layer if present.
@@ -791,51 +790,6 @@ extension LinuxContainer {
                 var mounts: [ContainerizationOCI.Mount] =
                     containerMounts.dropFirst(mountsToSkip)
                     .filter { !holdingTags.contains($0.source) }
-                    // ARCA PATCH: skip the OverlayFS block devices -- and only those. They are
-                    // attached with an empty destination precisely so that nothing here mounts
-                    // them, and OCI runtimes must not see them.
-                    //
-                    // **Nothing mounts them inside the guest any more.** The guest-side overlay
-                    // composition was deleted along with this fork's per-layer rootfs, so a
-                    // device attached this way is now attached and then dropped right here. The
-                    // producer outlived the consumer: `OverlayFSMounter.buildMounts` in the
-                    // parent repository's `ContainerBridge` module still emits these, which is
-                    // what keeps this filter live rather than inert. It comes out when that
-                    // producer does, and not before.
-                    //
-                    // The empty destination is the marker because it is the host's own
-                    // statement of intent (that same `buildMounts`, "Empty to prevent
-                    // auto-mount by framework"), and it is the one thing that distinguishes
-                    // them here: by this point every block mount's source has been rewritten
-                    // to a /dev/vdX the allocator chose, so the source says nothing about what
-                    // the device is. This filter used to drop every /dev/vd source, which took
-                    // named-volume block devices with it and was why no named volume was ever
-                    // mounted at its destination.
-                    //
-                    // **The source is not consulted, and the line used to say so while still
-                    // testing it.** It read
-                    // `!($0.source.hasPrefix("/dev/vd") && $0.destination.isEmpty)`, whose two
-                    // terms select the same set today only because both producers of an empty
-                    // destination happen to be block mounts. Deleting the first term changed
-                    // nothing, which makes it a guard no test can measure, and it was a latent
-                    // divergence besides: the day anything else marks a mount
-                    // don't-auto-mount, it would reach the OCI spec carrying an empty
-                    // destination -- which is not a mount any runtime can honour anyway.
-                    //
-                    // **What it would cost is a diagnostic, and that is worth saying out
-                    // loud rather than leaving implied.** Reaching the spec, such a mount
-                    // fails in the runtime with a message naming it; dropped here it is
-                    // simply absent, which is this milestone's signature failure mode. The
-                    // log line below is what keeps it from vanishing silently.
-                    .filter { attached in
-                        if attached.destination.isEmpty && !attached.source.hasPrefix("/dev/vd") {
-                            self.logger?.warning(
-                                "dropping a mount with no destination",
-                                metadata: ["source": "\(attached.source)", "type": "\(attached.type)"]
-                            )
-                        }
-                        return !attached.destination.isEmpty
-                    }
                     .map { attached -> ContainerizationOCI.Mount in
                         if attached.type == "virtiofs" {
                             // Transform to bind mount from holding directory

@@ -5,8 +5,8 @@
 // Application.run() body moved into AgentCommand.bootstrap(), and Application.swift became
 // a thin subcommand shell. The Arca additions that lived in that body are collected here
 // rather than inlined into AgentCommand.swift, so the fork's delta against upstream stays a
-// one-line call site instead of ~200 interleaved lines. Roadmap P8.2 wants exactly this
-// shape when a modification cannot be upstreamed.
+// one-line call site instead of `startServices` interleaved into an upstream file. Roadmap
+// P8.2 wants exactly this shape when a modification cannot be upstreamed.
 //
 // Dropped during that move: `waitForVsockService(port:serviceName:timeout:log:)`, which had
 // no call site in the fork. Readiness is handled host-side instead, by the daemon waiting on
@@ -15,18 +15,9 @@
 
 #if os(Linux)
 
-import Containerization
-import ContainerizationEXT4
 import ContainerizationOS
 import Foundation
 import Logging
-import SystemPackage
-
-#if canImport(Musl)
-import Musl
-#elseif canImport(Glibc)
-import Glibc
-#endif
 
 enum ArcaBoot {
     /// Starts the unified arca-services guest binary.

@@ -106,15 +106,6 @@ public final class LinuxContainer: Container, Sendable {
         /// on top of the container's configured `memoryInBytes` value.
         /// The total is aligned to a 1 MiB boundary.
         public var memoryOverhead: UInt64 = 128.mib()
-        /// ARCA PATCH: how many of `mounts` are OverlayFS layer block devices, as the caller
-        /// that attached them counted them. Reported to the guest on the kernel command line
-        /// so it can tell an image with no layers from layers it failed to identify.
-        ///
-        /// This is the attacher's INTENT and must stay so. Recomputing it here from the mounts
-        /// -- by their role labels, their options, or their position -- would agree with the
-        /// guest's own classification precisely when that classification is wrong, which is
-        /// the one case worth catching. See ``ArcaLayerAttachment``.
-        public var attachedOverlayLayers: Int?
 
         public init() {}
 
@@ -660,8 +651,7 @@ extension LinuxContainer {
                 interfaces: self.interfaces,
                 mountsByID: [self.id: containerMounts],
                 bootLog: self.config.bootLog,
-                nestedVirtualization: self.config.virtualization,
-                attachedOverlayLayers: self.config.attachedOverlayLayers
+                nestedVirtualization: self.config.virtualization
             )
             let creationConfig = StandardVMConfig(configuration: vmConfig)
             let vm = try await self.vmm.create(config: creationConfig)

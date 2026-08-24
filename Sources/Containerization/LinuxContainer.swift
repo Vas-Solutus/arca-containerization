@@ -627,8 +627,49 @@ extension LinuxContainer {
             // To remedy this, remove any "ro" options before passing to VZ. Having the OCI runtime
             // remount "ro" (which is what we do later in the guest) is truthfully the right thing,
             // but this bit here is just a tad awkward.
+            //
+            // FORK CHANGE: that strip is correct ONLY when the rootfs is the container's writable
+            // root. With a writable layer, `mountRootfs` makes this mount the read-only LOWER of an
+            // overlay -- it appends "ro" to it itself -- and /etc/hosts and /etc/resolv.conf are
+            // written into the upper. So there is no EROFS to avoid, and stripping "ro" costs
+            // something real: `Mount.readonly` goes false, so the device is attached
+            // `VZDiskImageStorageDeviceAttachment(readOnly: false)` -- and Virtualization.framework
+            // takes an exclusive write lock on the backing file, so a second VM cannot attach it.
+            // Since the revert to a single composed rootfs that image file is SHARED per image
+            // rather than per container, so the second container created from any one image failed
+            // with `VZErrorDomain Code=2 "The storage device attachment is invalid."`
+            //
+            // `InitImage.initBlock(at:for:)` is the in-repo precedent for the other half of that:
+            // it sets `options = ["ro"]` on the vminitd block file, which every VM on the host
+            // attaches concurrently through this same path. Read-only attachments of one image are
+            // shareable; read-write ones are not.
+            //
+            // This ASSERTS "ro" rather than merely honouring it, because `create()` has strictly
+            // better information than its caller: when there is a writable layer, `mountRootfs`
+            // guarantees this mount becomes the overlay's `lowerdir` and appends "ro" to it one
+            // function later regardless, so the block device is provably never written by the
+            // guest. Leaving the decision to the caller would make the shared-image case depend on
+            // every caller remembering an option that
+            // `Mount.block(format:source:destination:options:)` defaults to empty -- closing this
+            // instance of the bug without closing the class.
+            //
+            // `generateRuntimeSpec()` is unaffected: it reads `self.rootfs`, the unmutated stored
+            // property, not `modifiedRootfs`. The only thing this changes is the attachment flag.
+            //
+            // On cloud-hypervisor the same option flows through `Mount+CH.chDiskConfig(id:)` to
+            // `readonly: true` for the container rootfs disk, which is consistent but is NOT
+            // covered by any measurement behind this change -- every run was VZ on macOS.
+            //
+            // One coupling this creates: a read-only attachment cannot recover a dirty ext4
+            // journal. Safe today because `ImageRootfsUnpacker` builds `EXT4Unpacker` with the
+            // default `journal: nil`. If anyone ever passes a `JournalConfig` for image rootfs
+            // slots, an unclean shutdown would strand every later container on that digest.
             var modifiedRootfs = self.rootfs
-            modifiedRootfs.options.removeAll(where: { $0 == "ro" })
+            if self.writableLayer == nil {
+                modifiedRootfs.options.removeAll(where: { $0 == "ro" })
+            } else if !modifiedRootfs.options.contains("ro") {
+                modifiedRootfs.options.append("ro")
+            }
 
             let vmMemory = self.memoryInBytes + self.config.memoryOverhead
 
